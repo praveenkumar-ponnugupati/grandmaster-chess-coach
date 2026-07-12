@@ -2,17 +2,30 @@
 from __future__ import annotations
 
 import json
+import urllib.error
 import urllib.request
 from pathlib import Path
 
 HEADERS = {"User-Agent": "chess-coach-cli (personal post-game coaching tool)"}
 ARCHIVES_URL = "https://api.chess.com/pub/player/{user}/games/archives"
+PROFILE_URL = "https://api.chess.com/pub/player/{user}"
 
 
 def _get_json(url: str) -> dict:
     req = urllib.request.Request(url, headers=HEADERS)
     with urllib.request.urlopen(req, timeout=30) as resp:
         return json.load(resp)
+
+
+def player_exists(user: str) -> bool:
+    """True if chess.com knows this username."""
+    try:
+        _get_json(PROFILE_URL.format(user=user.lower()))
+        return True
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
 
 
 def fetch_games(user: str, months: int, cache_dir: Path) -> list[dict]:

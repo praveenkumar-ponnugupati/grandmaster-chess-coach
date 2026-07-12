@@ -13,9 +13,29 @@ from pathlib import Path
 import chess.engine
 
 from .analyze import analyze_game
-from .fetch import fetch_games
+from .fetch import fetch_games, player_exists
 from .memory import Supermemory
 from .report import build_report, coach_note_texts
+
+
+def _account_setup() -> str:
+    """First-run interactive setup: ask who we're coaching, verify the
+    account exists on chess.com before accepting it."""
+    print("First time here — let's set you up.")
+    while True:
+        try:
+            name = input("Who am I coaching? chess.com username: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            sys.exit(1)
+        if not name:
+            continue
+        print("Checking chess.com …", end=" ", flush=True)
+        if player_exists(name):
+            print(f"found you, {name}. I'll remember that.")
+            return name
+        print(f"chess.com doesn't know '{name}' — check the spelling "
+              "(see chess.com/member/<username>).")
 
 
 def main() -> int:
@@ -41,10 +61,13 @@ def main() -> int:
     data_dir = root / "data"
     last_user = data_dir / "last-user"
     if not args.username:
-        if not last_user.exists():
+        if last_user.exists():
+            args.username = last_user.read_text().strip()
+            print(f"Coaching {args.username} (remembered — pass a username to switch)")
+        elif sys.stdin.isatty():
+            args.username = _account_setup()
+        else:
             p.error("username required on the first run, e.g.: ./coach magnuscarlsen")
-        args.username = last_user.read_text().strip()
-        print(f"Coaching {args.username} (remembered — pass a username to switch)")
     print(f"Fetching games for {args.username} …")
     try:
         games = fetch_games(args.username, args.months, data_dir / "archives")

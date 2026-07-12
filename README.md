@@ -53,13 +53,14 @@ are skipped.
 ## Use
 
 ```bash
-./coach YOUR_USERNAME        # first run: introduce yourself once
-./coach                      # after that the coach remembers who you are
+./coach                      # first run asks who you are, then remembers
 ./coach --chat               # chat with your coach
 ./coach --months 6 --max-games 100 --movetime 0.2
 ```
 
-Pass a username any time to switch players.
+The first run is a tiny account setup: the coach asks for your chess.com
+username, verifies it actually exists, and never asks again. Pass a
+username any time (`./coach someoneelse`) to switch players.
 
 Reports land in `reports/`. Analysis is cached per game in `data/analysis/`,
 so re-runs only pay for new games. Higher `--movetime` = more accurate
