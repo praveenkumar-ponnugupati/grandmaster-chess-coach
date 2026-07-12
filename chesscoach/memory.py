@@ -12,13 +12,17 @@ import json
 import os
 import urllib.request
 
-API = "https://api.supermemory.ai/v3"
+# Cloud by default; point SUPERMEMORY_BASE_URL at a self-hosted instance
+# (e.g. http://localhost:6767) for a fully local stack.
+DEFAULT_BASE = "https://api.supermemory.ai"
 TAG = "chess-coach"
 
 
 class Supermemory:
-    def __init__(self, api_key: str | None = None):
+    def __init__(self, api_key: str | None = None, base_url: str | None = None):
         self.key = api_key or os.environ.get("SUPERMEMORY_API_KEY")
+        base = (base_url or os.environ.get("SUPERMEMORY_BASE_URL", DEFAULT_BASE))
+        self.api = base.rstrip("/") + "/v3"
 
     @property
     def enabled(self) -> bool:
@@ -38,7 +42,7 @@ class Supermemory:
 
     def _post(self, path: str, payload: dict) -> dict:
         req = urllib.request.Request(
-            API + path,
+            self.api + path,
             data=json.dumps(payload).encode(),
             headers={"Authorization": f"Bearer {self.key}",
                      "Content-Type": "application/json"},
