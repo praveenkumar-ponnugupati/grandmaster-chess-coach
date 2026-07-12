@@ -117,7 +117,8 @@ def _worst_blunders(games) -> list[str]:
     swings = []
     for g in games:
         for m in g["moves"]:
-            if m["class"] == "blunder":
+            # best==played means shallow-search noise, not a real blunder
+            if m["class"] == "blunder" and m["best_san"] != m["san"]:
                 swings.append((m["cp_loss"], m, g))
     swings.sort(key=lambda t: -t[0])
     lines = ["## Worst blunders", ""]
@@ -137,7 +138,8 @@ def _tactics_homework(games) -> list[str]:
     spots = []
     for g in games:
         for m in g["moves"]:
-            if m["class"] == "blunder" and m["eval_before"] >= WINNING_EVAL:
+            if (m["class"] == "blunder" and m["eval_before"] >= WINNING_EVAL
+                    and m["best_san"] != m["san"]):
                 spots.append((m["eval_before"] - m["eval_after"], m, g))
     spots.sort(key=lambda t: -t[0])
     lines = ["## Tactics homework — wins you threw away", "",
