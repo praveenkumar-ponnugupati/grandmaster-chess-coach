@@ -26,6 +26,9 @@ def main() -> int:
                    help="engine seconds per position (default 0.1 ≈ 6 s per game)")
     p.add_argument("--engine", default=shutil.which("stockfish"), help="path to a UCI engine")
     p.add_argument("--out", default="reports", help="report output directory")
+    p.add_argument("--chat", action="store_true",
+                   help="after analysis, chat with the coach about your games "
+                        "(fully local: Ollama + Llama 8B)")
     args = p.parse_args()
 
     if not args.engine:
@@ -59,6 +62,18 @@ def main() -> int:
     memory = Supermemory()
     past_notes = memory.recall_coaching(args.username)
     report = build_report(args.username, analyzed, past_notes=past_notes)
+
+    if args.chat:
+        from .chat import chat_loop, ollama_ready
+        problem = ollama_ready()
+        if problem:
+            print(problem, file=sys.stderr)
+            return 1
+        out_dir = root / args.out
+        out_dir.mkdir(parents=True, exist_ok=True)
+        (out_dir / f"{args.username.lower()}-coach-report.md").write_text(report)
+        chat_loop(args.username, report)
+        return 0
     out_dir = root / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{args.username.lower()}-coach-report.md"
