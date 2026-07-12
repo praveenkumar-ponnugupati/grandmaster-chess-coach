@@ -3,12 +3,29 @@
 #
 #   ./install.sh
 #
+# Or install without cloning first — the script bootstraps itself:
+#
+#   curl -fsSL https://raw.githubusercontent.com/praveenkumar-ponnugupati/grandmaster-chess-coach/main/install.sh | bash
+#
 # Installs/starts everything the fully self-hosted coach needs:
 #   Stockfish (engine), Ollama + models (local AI), a Python venv,
 #   and the self-hosted Supermemory server (long-term memory).
 # Safe to re-run: every step is skipped if already done.
 set -euo pipefail
-cd "$(dirname "$0")"
+
+# Self-bootstrap: when piped from curl (not run from a checkout), clone
+# the repo first and continue from inside it.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo "")"
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/chesscoach/__main__.py" ]; then
+    cd "$SCRIPT_DIR"
+else
+    DEST="${CHESS_COACH_DIR:-$HOME/chess-coach}"
+    if [ ! -d "$DEST/.git" ]; then
+        echo "Cloning Grandmaster Chess Coach into $DEST …"
+        git clone https://github.com/praveenkumar-ponnugupati/grandmaster-chess-coach.git "$DEST"
+    fi
+    cd "$DEST"
+fi
 
 CHAT_MODEL="llama3.1:8b"     # chat coach (~5 GB)
 MEMORY_MODEL="llama3.2:3b"   # supermemory's LLM (~2 GB)
@@ -105,10 +122,11 @@ curl -s -m 3 http://localhost:11434/api/tags >/dev/null || fail "ollama not resp
 curl -s -m 3 "http://localhost:${SM_PORT}/" >/dev/null || fail "supermemory not responding"
 ok "all components up"
 
-cat <<'EOF'
+cat <<EOF
 
 Done. Get coached:
 
+    cd $PWD
     ./coach YOUR_CHESSCOM_USERNAME            # coaching report
     ./coach YOUR_CHESSCOM_USERNAME --chat     # + chat with your coach
 
