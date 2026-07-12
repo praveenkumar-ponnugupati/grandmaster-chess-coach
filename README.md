@@ -27,26 +27,34 @@ you between sessions:
 - each new report opens a **Coach's memory** section recalling what was
   flagged before, so you can see whether you actually fixed it
 
+`./install.sh` sets up a **self-hosted** Supermemory server on
+`localhost:6767` backed by your local Ollama, and `./coach` wires it up
+automatically — fully local memory, no cloud account. (A cloud key from
+[console.supermemory.ai](https://console.supermemory.ai) works too:
+`export SUPERMEMORY_API_KEY=sm_…`.)
+
+No server / no key → the coach runs statelessly; memory is an
+enhancement, never a dependency.
+
+## Install (one step)
+
 ```bash
-export SUPERMEMORY_API_KEY=sm_…   # from https://console.supermemory.ai
-./venv/bin/python -m chesscoach YOUR_USERNAME
+git clone https://github.com/praveenkumar-ponnugupati/grandmaster-chess-coach.git
+cd grandmaster-chess-coach && ./install.sh
 ```
 
-No key → the coach runs statelessly; memory is an enhancement, never a
-dependency.
-
-## Setup
-
-```bash
-brew install stockfish
-python3 -m venv venv && ./venv/bin/pip install python-chess
-```
+That installs and starts the whole self-hosted stack — Stockfish
+(engine), Ollama + Llama models (local AI), a Python venv, and the
+Supermemory server. Needs macOS with [Homebrew](https://brew.sh); the
+model downloads (~7 GB) happen once. Safe to re-run: completed steps
+are skipped.
 
 ## Use
 
 ```bash
-./venv/bin/python -m chesscoach YOUR_USERNAME            # last 2 months, 30 games
-./venv/bin/python -m chesscoach YOUR_USERNAME --months 6 --max-games 100 --movetime 0.2
+./coach YOUR_USERNAME                                    # last 2 months, 30 games
+./coach YOUR_USERNAME --chat                             # + chat with your coach
+./coach YOUR_USERNAME --months 6 --max-games 100 --movetime 0.2
 ```
 
 Reports land in `reports/`. Analysis is cached per game in `data/analysis/`,
@@ -56,9 +64,7 @@ classification, linearly slower (0.1 s/move ≈ 6 s per game).
 ## Chat with your coach (fully local)
 
 ```bash
-brew install ollama && brew services start ollama
-ollama pull llama3.1:8b        # once, ~4.9 GB
-./venv/bin/python -m chesscoach YOUR_USERNAME --chat
+./coach YOUR_USERNAME --chat
 ```
 
 An interactive coach grounded in your report — "why do I keep losing

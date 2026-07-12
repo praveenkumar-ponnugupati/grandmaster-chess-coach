@@ -34,10 +34,20 @@ is the demo hook.
 ## Run & test
 
 ```bash
-./venv/bin/python -m chesscoach praveenkumar1619                # report (cached: <1 s)
-./venv/bin/python -m chesscoach praveenkumar1619 --chat         # local chat (Ollama llama3.1:8b, installed)
-./venv/bin/python -m chesscoach hikaru --months 1 --max-games 2 --movetime 0.05   # quick smoke on public account
+./coach praveenkumar1619                # report, memory auto-wired (cached: <1 s)
+./coach praveenkumar1619 --chat         # local chat (Ollama llama3.1:8b, installed)
+./coach hikaru --months 1 --max-games 2 --movetime 0.05   # quick smoke on public account
 ```
+
+`./install.sh` is the one-step installer (idempotent). `./coach` wraps
+`python -m chesscoach`, auto-exporting the Supermemory key from
+`.supermemory/api-key` (gitignored) when the local server is on :6767.
+The server runs from the repo root so its data lives in `.supermemory/`;
+if :6767 is down, restart:
+`OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=ollama
+MODEL=llama3.2:3b nohup ~/.local/bin/supermemory-server >> .supermemory/server.log 2>&1 &`
+(Claude cannot run install.sh itself — it contains a curl|bash for the
+Supermemory installer, which the permission layer blocks.)
 
 No test suite yet; verification is CLI runs like the above. venv is checked
 out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
@@ -64,10 +74,10 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 1. **VERIFIED 2026-07-12: Supermemory end-to-end works** against the
    self-hosted server on localhost:6767 (backed by local Ollama). First run
    stored 10 games + session advice; second run recalled it and rendered the
-   "Coach's memory" section. Run with `SUPERMEMORY_API_KEY=<key from the
-   server's first boot> SUPERMEMORY_BASE_URL=http://localhost:6767`; never
+   "Coach's memory" section. `./coach` wires the key automatically; never
    print or commit the key. The full coach is now self-hosted:
-   Stockfish + Ollama + Supermemory, all local.
+   Stockfish + Ollama + Supermemory, all local. `--chat` also verified
+   end-to-end (answers matched the report's worst-blunder line exactly).
 2. Planned features (README roadmap): `scout OPPONENT` subcommand (~80% reuse),
    v2 local web review board (consumes `data/analysis/` JSON), opening drills,
    puzzle export, progress dashboard over Supermemory.

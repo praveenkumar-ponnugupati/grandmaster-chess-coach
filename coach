@@ -1,0 +1,23 @@
+#!/bin/bash
+# Run the chess coach with the local Supermemory auto-wired.
+#
+#   ./coach YOUR_CHESSCOM_USERNAME [--chat] [--months N] ...
+#
+# If the self-hosted Supermemory server (installed by ./install.sh) is
+# running on localhost:6767 and its API key is found, long-term memory
+# is enabled automatically. Otherwise the coach runs statelessly —
+# memory is an enhancement, never a dependency.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+[ -x venv/bin/python ] || { echo "Run ./install.sh first." >&2; exit 1; }
+
+SM_PORT=6767
+if [ -z "${SUPERMEMORY_API_KEY:-}" ] \
+   && lsof -iTCP:$SM_PORT -sTCP:LISTEN >/dev/null 2>&1 \
+   && [ -f .supermemory/api-key ]; then
+    export SUPERMEMORY_API_KEY="$(cat .supermemory/api-key)"
+    export SUPERMEMORY_BASE_URL="http://localhost:${SM_PORT}"
+fi
+
+exec venv/bin/python -m chesscoach "$@"
