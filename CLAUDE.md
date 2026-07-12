@@ -61,16 +61,13 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 
 ## Current state / next steps
 
-1. **UNTESTED: Supermemory end-to-end** (the differentiator). Local server was
-   about to be installed when the last session ended. Steps: user runs
-   `curl -fsSL https://supermemory.ai/install | bash` themselves (Claude's
-   permission layer blocks remote-script installs — do NOT retry it from
-   Claude; ask the user to run it), then
-   `OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=ollama
-   OPENAI_MODEL=llama3.1:8b supermemory-server` (listens on :6767, prints an
-   API key on first boot). Then run the report twice with
-   `SUPERMEMORY_API_KEY=<key> SUPERMEMORY_BASE_URL=http://localhost:6767` —
-   second run must show the "Coach's memory" section.
+1. **VERIFIED 2026-07-12: Supermemory end-to-end works** against the
+   self-hosted server on localhost:6767 (backed by local Ollama). First run
+   stored 10 games + session advice; second run recalled it and rendered the
+   "Coach's memory" section. Run with `SUPERMEMORY_API_KEY=<key from the
+   server's first boot> SUPERMEMORY_BASE_URL=http://localhost:6767`; never
+   print or commit the key. The full coach is now self-hosted:
+   Stockfish + Ollama + Supermemory, all local.
 2. Planned features (README roadmap): `scout OPPONENT` subcommand (~80% reuse),
    v2 local web review board (consumes `data/analysis/` JSON), opening drills,
    puzzle export, progress dashboard over Supermemory.
