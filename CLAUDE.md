@@ -28,8 +28,12 @@ is the demo hook.
   and Ollama (HTTP on :11434) are external processes, not pip deps.
 - Logic lives in `chesscoach/`; `__main__.py` stays thin.
 - `data/` and `reports/` are gitignored — never commit user game data.
-- Memory (Supermemory) is an **enhancement, never a dependency**: no key or a
-  failing server must never break a run (see `_post_safe`, `recall` try/except).
+- Memory (Supermemory) is the **point of the product** (owner's mandate,
+  2026-07-12). `./coach` GUARANTEES it: auto-starts the local server if
+  :6767 is down and refuses to run memoryless. Inside the Python package the
+  old graceful degradation stays (`_post_safe`, `recall` try/except) so a
+  mid-run hiccup never destroys a finished analysis — but the entry point
+  must never silently produce a stateless run.
 
 ## Run & test
 

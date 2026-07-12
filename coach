@@ -1,21 +1,38 @@
 #!/bin/bash
-# Run the chess coach with the local Supermemory auto-wired.
+# Run the chess coach. Long-term memory (self-hosted Supermemory) is the
+# heart of this coach, so this launcher GUARANTEES it: if the server on
+# localhost:6767 isn't running it is started automatically, and if memory
+# can't be enabled the coach refuses to run rather than silently forget.
 #
 #   ./coach YOUR_CHESSCOM_USERNAME [--chat] [--months N] ...
-#
-# If the self-hosted Supermemory server (installed by ./install.sh) is
-# running on localhost:6767 and its API key is found, long-term memory
-# is enabled automatically. Otherwise the coach runs statelessly —
-# memory is an enhancement, never a dependency.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 [ -x venv/bin/python ] || { echo "Run ./install.sh first." >&2; exit 1; }
 
 SM_PORT=6767
-if [ -z "${SUPERMEMORY_API_KEY:-}" ] \
-   && lsof -iTCP:$SM_PORT -sTCP:LISTEN >/dev/null 2>&1 \
-   && [ -f .supermemory/api-key ]; then
+MEMORY_MODEL="llama3.2:3b"
+
+server_up() { lsof -iTCP:$SM_PORT -sTCP:LISTEN >/dev/null 2>&1; }
+
+if [ -z "${SUPERMEMORY_API_KEY:-}" ]; then
+    if ! server_up; then
+        SM_BIN="$(command -v supermemory-server || true)"
+        [ -z "$SM_BIN" ] && [ -x "$HOME/.local/bin/supermemory-server" ] \
+            && SM_BIN="$HOME/.local/bin/supermemory-server"
+        [ -n "$SM_BIN" ] || { echo "supermemory-server not installed — run ./install.sh first." >&2; exit 1; }
+        echo "Memory server not running — starting it …"
+        mkdir -p .supermemory
+        OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=ollama \
+            MODEL="$MEMORY_MODEL" nohup "$SM_BIN" >> .supermemory/server.log 2>&1 &
+        for _ in $(seq 1 60); do
+            server_up && [ -f .supermemory/api-key ] && break
+            sleep 1
+        done
+    fi
+    server_up || { echo "Memory server failed to start — see .supermemory/server.log" >&2; exit 1; }
+    [ -f .supermemory/api-key ] \
+        || { echo "Memory server is up but no API key at .supermemory/api-key — was it started from another directory? Restart it from the repo root or export SUPERMEMORY_API_KEY." >&2; exit 1; }
     export SUPERMEMORY_API_KEY="$(cat .supermemory/api-key)"
     export SUPERMEMORY_BASE_URL="http://localhost:${SM_PORT}"
 fi

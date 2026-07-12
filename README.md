@@ -28,13 +28,12 @@ you between sessions:
   flagged before, so you can see whether you actually fixed it
 
 `./install.sh` sets up a **self-hosted** Supermemory server on
-`localhost:6767` backed by your local Ollama, and `./coach` wires it up
-automatically — fully local memory, no cloud account. (A cloud key from
+`localhost:6767` backed by your local Ollama, and `./coach` guarantees
+it: if the server isn't running it is started automatically, and the
+coach won't run without its memory — a coach who forgets you isn't a
+coach. Fully local, no cloud account. (A cloud key from
 [console.supermemory.ai](https://console.supermemory.ai) works too:
 `export SUPERMEMORY_API_KEY=sm_…`.)
-
-No server / no key → the coach runs statelessly; memory is an
-enhancement, never a dependency.
 
 ## Install (one step)
 
