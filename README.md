@@ -1,6 +1,6 @@
 # Grandmaster Chess Coach — chess.com
 
-Open-source (MIT), local-first post-game coaching from your own chess.com games: fetches your archive via
+Local-first post-game coaching from your own chess.com games: fetches your archive via
 the free public API, analyzes every move you played with Stockfish, and
 writes a Markdown coaching report.
 
@@ -53,15 +53,13 @@ Reports land in `reports/`. Analysis is cached per game in `data/analysis/`,
 so re-runs only pay for new games. Higher `--movetime` = more accurate
 classification, linearly slower (0.1 s/move ≈ 6 s per game).
 
-## Contributing
-
-Issues and PRs welcome. Keep it dependency-light (stdlib + python-chess),
-post-game only (no live-play assistance — chess.com fair play), and put
-logic in `chesscoach/` with the CLI staying thin.
-
 ## License
 
-[MIT](LICENSE) — do what you like, attribution appreciated.
+Copyright © 2026 Praveen Kumar Ponnugupati. All rights reserved.
+
+The source is public for demonstration and evaluation (hackathon judging),
+but this is **not** open-source software: no permission is granted to copy,
+modify, redistribute, or reuse the code. Feel free to open issues.
 
 ## Roadmap
 
