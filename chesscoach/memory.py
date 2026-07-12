@@ -8,6 +8,8 @@ instead of restarting from zero every run.
 Requires SUPERMEMORY_API_KEY in the environment; without it everything
 degrades to a no-op and the CLI works standalone.
 """
+from __future__ import annotations
+
 import json
 import os
 import urllib.request

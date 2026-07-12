@@ -1,4 +1,6 @@
 """chess.com public API client — no auth needed, but a UA is required."""
+from __future__ import annotations
+
 import json
 import urllib.request
 from pathlib import Path

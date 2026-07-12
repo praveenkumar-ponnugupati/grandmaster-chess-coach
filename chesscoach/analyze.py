@@ -1,4 +1,6 @@
 """Engine analysis of one player's moves in their chess.com games."""
+from __future__ import annotations
+
 import io
 import json
 from pathlib import Path

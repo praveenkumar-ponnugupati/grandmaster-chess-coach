@@ -35,12 +35,14 @@ coach. Fully local, no cloud account. (A cloud key from
 [console.supermemory.ai](https://console.supermemory.ai) works too:
 `export SUPERMEMORY_API_KEY=sm_…`.)
 
-## Install (one step)
+## Install (one command)
 
 ```bash
-git clone https://github.com/praveenkumar-ponnugupati/grandmaster-chess-coach.git
-cd grandmaster-chess-coach && ./install.sh
+curl -fsSL https://raw.githubusercontent.com/praveenkumar-ponnugupati/grandmaster-chess-coach/main/install.sh | bash
 ```
+
+(Or clone first and run `./install.sh` — same thing; the one-liner
+clones into `~/chess-coach` for you.)
 
 That installs and starts the whole self-hosted stack — Stockfish
 (engine), Ollama + Llama models (local AI), a Python venv, and the

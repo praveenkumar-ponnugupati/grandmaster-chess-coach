@@ -3,6 +3,8 @@
 The model is grounded in the freshly built coaching report; it never
 sees the network, and nothing about your games leaves the machine.
 """
+from __future__ import annotations
+
 import json
 import sys
 import urllib.error
