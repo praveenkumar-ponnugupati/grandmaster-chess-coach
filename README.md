@@ -53,6 +53,19 @@ Reports land in `reports/`. Analysis is cached per game in `data/analysis/`,
 so re-runs only pay for new games. Higher `--movetime` = more accurate
 classification, linearly slower (0.1 s/move ≈ 6 s per game).
 
+## Chat with your coach (fully local)
+
+```bash
+brew install ollama && brew services start ollama
+ollama pull llama3.1:8b        # once, ~4.9 GB
+./venv/bin/python -m chesscoach YOUR_USERNAME --chat
+```
+
+An interactive coach grounded in your report — "why do I keep losing
+endgames?", "walk me through my worst blunder" — running entirely on
+your machine via Ollama + Llama 3.1 8B. No cloud, no keys, your games
+never leave your Mac.
+
 ## License
 
 Copyright © 2026 Praveen Kumar Ponnugupati. All rights reserved.
