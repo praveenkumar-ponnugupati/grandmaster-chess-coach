@@ -53,11 +53,22 @@ done
 
 step "[3/5] Python environment"
 if [ -x venv/bin/python ] && venv/bin/python -c 'import chess' 2>/dev/null; then
-    ok "venv ready"
+    ok "venv ready ($(venv/bin/python -V))"
 else
-    python3 -m venv venv
+    # Prefer a modern interpreter; stock macOS python3 can be as old as 3.9
+    PY=""
+    for cand in python3.13 python3.12 python3.11 python3.10 python3; do
+        command -v "$cand" >/dev/null || continue
+        "$cand" -c 'import sys; sys.exit(sys.version_info < (3, 10))' && { PY="$cand"; break; }
+    done
+    if [ -z "$PY" ]; then
+        command -v brew >/dev/null || fail "python3 ≥3.10 required — install it or Homebrew first"
+        brew install python@3.12
+        PY="$(brew --prefix)/bin/python3.12"
+    fi
+    "$PY" -m venv venv
     venv/bin/pip install --quiet python-chess
-    ok "venv created, python-chess installed"
+    ok "venv created with $("$PY" -V), python-chess installed"
 fi
 
 step "[4/5] Supermemory server (self-hosted, localhost:${SM_PORT})"

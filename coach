@@ -31,9 +31,17 @@ if [ -z "${SUPERMEMORY_API_KEY:-}" ]; then
         done
     fi
     server_up || { echo "Memory server failed to start — see .supermemory/server.log" >&2; exit 1; }
-    [ -f .supermemory/api-key ] \
-        || { echo "Memory server is up but no API key at .supermemory/api-key — was it started from another directory? Restart it from the repo root or export SUPERMEMORY_API_KEY." >&2; exit 1; }
-    export SUPERMEMORY_API_KEY="$(cat .supermemory/api-key)"
+    KEY_FILE=.supermemory/api-key
+    if [ ! -f "$KEY_FILE" ]; then
+        # Server was started from another directory (e.g. a second checkout):
+        # find its working dir via its PID and use the key it keeps there.
+        SM_PID="$(lsof -tiTCP:$SM_PORT -sTCP:LISTEN 2>/dev/null | head -1)"
+        SM_CWD="$(lsof -a -p "$SM_PID" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p' | head -1)"
+        [ -n "$SM_CWD" ] && [ -f "$SM_CWD/.supermemory/api-key" ] && KEY_FILE="$SM_CWD/.supermemory/api-key"
+    fi
+    [ -f "$KEY_FILE" ] \
+        || { echo "Memory server is up on :${SM_PORT} but its API key can't be found — restart it from this directory (kill it, then re-run ./coach) or export SUPERMEMORY_API_KEY." >&2; exit 1; }
+    export SUPERMEMORY_API_KEY="$(cat "$KEY_FILE")"
     export SUPERMEMORY_BASE_URL="http://localhost:${SM_PORT}"
 fi
 
