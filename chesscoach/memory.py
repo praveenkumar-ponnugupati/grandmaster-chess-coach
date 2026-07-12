@@ -91,13 +91,33 @@ class Supermemory:
             "metadata": {"kind": "coach-session"},
         })
 
+    def remember_scout(self, opponent: str, summary: str) -> None:
+        if not self.enabled or not summary:
+            return
+        self._post_safe("/documents", {
+            "content": f"Scouting report on {opponent}:\n{summary}",
+            "containerTags": [TAG, opponent.lower()],
+            "metadata": {"kind": "scout-report"},
+        })
+
     def recall_coaching(self, user: str, limit: int = 5) -> list[str]:
         """Earlier coaching advice for this player, most relevant first."""
+        return self._recall(
+            f"coaching advice, weaknesses and study plan for {user}",
+            user, "Coaching session", limit)
+
+    def recall_scouting(self, opponent: str, limit: int = 5) -> list[str]:
+        """Earlier scouting notes on this opponent, most relevant first."""
+        return self._recall(
+            f"scouting report, weaknesses and game plan against {opponent}",
+            opponent, "Scouting report", limit)
+
+    def _recall(self, query: str, user: str, marker: str, limit: int) -> list[str]:
         if not self.enabled:
             return []
         try:
             res = self._post("/search", {
-                "q": f"coaching advice, weaknesses and study plan for {user}",
+                "q": query,
                 "containerTags": [TAG, user.lower()],
                 "limit": limit,
             })
@@ -110,6 +130,6 @@ class Supermemory:
             text = (r.get("memory") or r.get("content")
                     or " ".join(c.get("content", "")
                                 for c in r.get("chunks", []) if isinstance(c, dict)))
-            if text and "Coaching session" in text:
+            if text and marker in text:
                 notes.append(text.strip())
         return notes

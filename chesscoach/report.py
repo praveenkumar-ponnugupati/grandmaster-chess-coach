@@ -71,7 +71,7 @@ def _overview(games) -> list[str]:
     return lines
 
 
-def _phases(games) -> list[str]:
+def _phases(games, title="Where you lose your games") -> list[str]:
     buckets = {"opening": [], "middlegame": [], "endgame": []}
     for g in games:
         for m in g["moves"]:
@@ -81,7 +81,7 @@ def _phases(games) -> list[str]:
                 buckets["middlegame"].append(m["cp_loss"])
             else:
                 buckets["endgame"].append(m["cp_loss"])
-    lines = ["## Where you lose your games", "",
+    lines = [f"## {title}", "",
              "| Phase | Moves | ACPL | Blunders |", "|---|---|---|---|"]
     for phase, losses in buckets.items():
         if not losses:
@@ -93,8 +93,8 @@ def _phases(games) -> list[str]:
     return lines
 
 
-def _openings(games) -> list[str]:
-    lines = ["## Your openings", ""]
+def _openings(games, whose="Your") -> list[str]:
+    lines = [f"## {whose} openings", ""]
     for color, flag in (("White", True), ("Black", False)):
         rows = defaultdict(list)
         for g in games:
@@ -115,7 +115,7 @@ def _openings(games) -> list[str]:
     return lines
 
 
-def _worst_blunders(games) -> list[str]:
+def _worst_blunders(games, header="Worst blunders") -> list[str]:
     swings = []
     for g in games:
         for m in g["moves"]:
@@ -123,7 +123,7 @@ def _worst_blunders(games) -> list[str]:
             if m["class"] == "blunder" and m["best_san"] != m["san"]:
                 swings.append((m["cp_loss"], m, g))
     swings.sort(key=lambda t: -t[0])
-    lines = ["## Worst blunders", ""]
+    lines = [f"## {header}", ""]
     if not swings:
         return lines + ["None found — nice.", ""]
     for cp, m, g in swings[:10]:
