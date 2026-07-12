@@ -16,6 +16,25 @@ The report covers:
 Strictly post-game: this tool never suggests moves during live play
 (that violates chess.com fair play).
 
+## Long-term memory (Supermemory)
+
+With a [Supermemory](https://supermemory.ai) API key, the coach remembers
+you between sessions:
+
+- every analyzed game is stored as a memory (deduped by game id, tagged
+  per player), including each blunder with its position FEN
+- every coaching session's advice is stored
+- each new report opens a **Coach's memory** section recalling what was
+  flagged before, so you can see whether you actually fixed it
+
+```bash
+export SUPERMEMORY_API_KEY=sm_…   # from https://console.supermemory.ai
+./venv/bin/python -m chesscoach YOUR_USERNAME
+```
+
+No key → the coach runs statelessly; memory is an enhancement, never a
+dependency.
+
 ## Setup
 
 ```bash

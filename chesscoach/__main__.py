@@ -13,7 +13,8 @@ import chess.engine
 
 from .analyze import analyze_game
 from .fetch import fetch_games
-from .report import build_report
+from .memory import Supermemory
+from .report import build_report, coach_note_texts
 
 
 def main() -> int:
@@ -55,13 +56,25 @@ def main() -> int:
             print(f"\r  {i}/{len(games)}", end="", flush=True)
     print()
 
-    report = build_report(args.username, analyzed)
+    memory = Supermemory()
+    past_notes = memory.recall_coaching(args.username)
+    report = build_report(args.username, analyzed, past_notes=past_notes)
     out_dir = root / args.out
     out_dir.mkdir(parents=True, exist_ok=True)
     out_file = out_dir / f"{args.username.lower()}-coach-report.md"
     out_file.write_text(report)
     print(report)
     print(f"\nSaved: {out_file}")
+
+    if memory.enabled:
+        for g in analyzed:
+            memory.remember_game(args.username, g)
+        memory.remember_session(args.username,
+                                "\n".join(coach_note_texts(analyzed)))
+        print(f"Supermemory: remembered {len(analyzed)} games + this session's advice"
+              f" (recalled {len(past_notes)} earlier note(s))")
+    else:
+        print("Supermemory: SUPERMEMORY_API_KEY not set — coach ran without long-term memory")
     return 0
 
 

@@ -10,7 +10,8 @@ MIDDLEGAME_PLIES = 60
 WINNING_EVAL = 150
 
 
-def build_report(user: str, games: list[dict]) -> str:
+def build_report(user: str, games: list[dict],
+                 past_notes: list[str] | None = None) -> str:
     lines = [f"# Chess coach report — {user}",
              f"_{len(games)} games analyzed · generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC_",
              ""]
@@ -19,8 +20,19 @@ def build_report(user: str, games: list[dict]) -> str:
     lines += _openings(games)
     lines += _worst_blunders(games)
     lines += _tactics_homework(games)
+    if past_notes:
+        lines += ["## Coach's memory", "",
+                  "What your coach flagged in earlier sessions "
+                  "(recalled via Supermemory) — check yourself against it:", ""]
+        lines += [f"> {n.splitlines()[-1] if n.splitlines() else n}" for n in past_notes]
+        lines += [""]
     lines += _coach_notes(games)
     return "\n".join(lines)
+
+
+def coach_note_texts(games: list[dict]) -> list[str]:
+    """The advice bullets — shared by the report and the session memory."""
+    return _notes(games)
 
 
 def _score(games) -> str:
@@ -143,6 +155,10 @@ def _tactics_homework(games) -> list[str]:
 
 
 def _coach_notes(games) -> list[str]:
+    return ["## Coach's notes", ""] + [f"- {n}" for n in _notes(games)] + [""]
+
+
+def _notes(games) -> list[str]:
     """Heuristic 'what to work on' summary from the aggregates."""
     notes = []
     phase_loss = defaultdict(list)
@@ -172,4 +188,4 @@ def _coach_notes(games) -> list[str]:
                      f"**{thrown} time(s)** — when winning, slow down and blunder-check "
                      "every capture and check.")
 
-    return ["## Coach's notes", ""] + [f"- {n}" for n in notes] + [""]
+    return notes
