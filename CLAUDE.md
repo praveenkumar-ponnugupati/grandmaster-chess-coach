@@ -67,7 +67,11 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 - `report.py` — pure aggregation → Markdown (overview, phase table, openings,
   worst blunders, FEN "tactics homework", coach notes). Display filters skip
   noise where best_san == played san.
-- `chat.py` — Ollama `/api/chat` streaming; whole report = system prompt.
+- `chat.py` — Ollama `/api/chat` streaming; whole report = system prompt
+  (coach persona, or scout persona with `scouting=True`).
+- `scout.py` — opponent scouting report (`./coach scout OPPONENT`): reuses
+  report.py section helpers with flipped headers + a "Game plan"; scout
+  sessions remembered/recalled via memory.py (`kind: scout-report`).
 - `memory.py` — Supermemory `/v3/documents` + `/v3/search`; container tags
   `["chess-coach", <user>]`; games deduped by `customId: game-<uuid>`;
   `SUPERMEMORY_BASE_URL` overrides cloud (use `http://localhost:6767` for
@@ -82,9 +86,10 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
    print or commit the key. The full coach is now self-hosted:
    Stockfish + Ollama + Supermemory, all local. `--chat` also verified
    end-to-end (answers matched the report's worst-blunder line exactly).
-2. Planned features (README roadmap): `scout OPPONENT` subcommand (~80% reuse),
-   v2 local web review board (consumes `data/analysis/` JSON), opening drills,
-   puzzle export, progress dashboard over Supermemory.
+2. `scout OPPONENT` shipped 2026-07-12 (scout.py; verified on hikaru incl.
+   Scout's memory recall + scout chat). Remaining roadmap: v2 local web
+   review board (consumes `data/analysis/` JSON), opening drills, puzzle
+   export, progress dashboard over Supermemory.
 3. Nice-to-have fixes: movetime in analysis cache key; chat currently picks
    an arbitrary blunder when asked for "worst" (report order helps but the
    LLM can drift).

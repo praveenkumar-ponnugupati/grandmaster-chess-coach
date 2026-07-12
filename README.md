@@ -53,14 +53,31 @@ are skipped.
 ## Use
 
 ```bash
-./coach YOUR_USERNAME                                    # last 2 months, 30 games
-./coach YOUR_USERNAME --chat                             # + chat with your coach
-./coach YOUR_USERNAME --months 6 --max-games 100 --movetime 0.2
+./coach                      # first run asks who you are, then remembers
+./coach --chat               # chat with your coach
+./coach --months 6 --max-games 100 --movetime 0.2
 ```
+
+The first run is a tiny account setup: the coach asks for your chess.com
+username, verifies it actually exists, and never asks again. Pass a
+username any time (`./coach someoneelse`) to switch players.
 
 Reports land in `reports/`. Analysis is cached per game in `data/analysis/`,
 so re-runs only pay for new games. Higher `--movetime` = more accurate
 classification, linearly slower (0.1 s/move ≈ 6 s per game).
+
+## Scout your next opponent
+
+```bash
+./coach scout THEIR_USERNAME             # scouting report
+./coach scout THEIR_USERNAME --chat      # brief with your scout
+```
+
+Same engine analysis, pointed at a rival's finished public games: where
+they bleed evaluation, the openings they lean on, their worst blunders,
+and a **game plan** for facing them. With Supermemory, a **Scout's
+memory** section recalls what you noted about them last time. Pre-game
+prep from public archives only — never live assistance.
 
 ## Chat with your coach (fully local)
 
@@ -87,3 +104,4 @@ modify, redistribute, or reuse the code. Feel free to open issues.
   through the homework positions)
 - Opening drill mode (repertoire mining is already in the report)
 - Puzzle export (PGN/Lichess study) from the homework FENs
+- ~~Opponent scouting~~ — shipped (`./coach scout OPPONENT`)

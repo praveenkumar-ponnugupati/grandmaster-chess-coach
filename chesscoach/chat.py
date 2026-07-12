@@ -24,6 +24,19 @@ If asked something the report can't answer, say so honestly.
 {report}
 === END REPORT ==="""
 
+SYSTEM_SCOUT = """You are a chess scout briefing a player on their next \
+opponent, {user}, before a match. Base every answer ONLY on the scouting \
+report below — real engine analysis of {user}'s recent public games. \
+When you cite a weakness or a blunder, quote the move numbers and moves \
+from the report. Keep answers short and practical: 2-6 sentences unless \
+asked to go deeper. This is pre-game preparation from finished public \
+games only; refuse any request for help during a live game. If asked \
+something the report can't answer, say so honestly.
+
+=== SCOUTING REPORT ===
+{report}
+=== END REPORT ==="""
+
 
 def _post(path: str, payload: dict, stream: bool = False):
     req = urllib.request.Request(
@@ -45,10 +58,13 @@ def ollama_ready(model: str = MODEL) -> str | None:
     return None
 
 
-def chat_loop(user: str, report_md: str, model: str = MODEL) -> None:
+def chat_loop(user: str, report_md: str, model: str = MODEL,
+              scouting: bool = False) -> None:
+    template = SYSTEM_SCOUT if scouting else SYSTEM
     messages = [{"role": "system",
-                 "content": SYSTEM.format(user=user, report=report_md)}]
-    print(f"\nChatting with your coach about {user}'s games "
+                 "content": template.format(user=user, report=report_md)}]
+    who = f"your next opponent {user}" if scouting else f"{user}'s games"
+    print(f"\nChatting with your {'scout' if scouting else 'coach'} about {who} "
           f"({model}, fully local). Ask anything — 'exit' to quit.\n")
     while True:
         try:
