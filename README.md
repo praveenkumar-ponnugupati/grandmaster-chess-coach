@@ -1,4 +1,4 @@
-# chess-coach
+# Grandmaster Chess Coach — chess.com
 
 Post-game coaching from your own chess.com games: fetches your archive via
 the free public API, analyzes every move you played with Stockfish, and
