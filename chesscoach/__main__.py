@@ -7,6 +7,7 @@ Usage:
 import argparse
 import shutil
 import sys
+import urllib.error
 from pathlib import Path
 
 import chess.engine
@@ -38,7 +39,14 @@ def main() -> int:
     root = Path(__file__).resolve().parent.parent
     data_dir = root / "data"
     print(f"Fetching games for {args.username} …")
-    games = fetch_games(args.username, args.months, data_dir / "archives")
+    try:
+        games = fetch_games(args.username, args.months, data_dir / "archives")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            print(f"chess.com doesn't know a player called '{args.username}' — "
+                  "check the spelling (see chess.com/member/<username>).", file=sys.stderr)
+            return 1
+        raise
     # Rated standard-chess games only; newest first
     games = [g for g in games if g.get("rules") == "chess" and g.get("rated")]
     games.sort(key=lambda g: g.get("end_time", 0), reverse=True)
@@ -86,8 +94,9 @@ def main() -> int:
             memory.remember_game(args.username, g)
         memory.remember_session(args.username,
                                 "\n".join(coach_note_texts(analyzed)))
-        print(f"Supermemory: remembered {len(analyzed)} games + this session's advice"
-              f" (recalled {len(past_notes)} earlier note(s))")
+        if memory.enabled:  # still true only if no write failed mid-way
+            print(f"Supermemory: remembered {len(analyzed)} games + this session's advice"
+                  f" (recalled {len(past_notes)} earlier note(s))")
     else:
         print("Supermemory: SUPERMEMORY_API_KEY not set — coach ran without long-term memory")
     return 0

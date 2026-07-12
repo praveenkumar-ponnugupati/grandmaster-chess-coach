@@ -24,6 +24,18 @@ class Supermemory:
     def enabled(self) -> bool:
         return bool(self.key)
 
+    def _post_safe(self, path: str, payload: dict) -> bool:
+        """Memory is an enhancement — a failed write must never kill the
+        report. Returns False (and disables further writes) on auth/API
+        errors so a bad key produces one warning, not N."""
+        try:
+            self._post(path, payload)
+            return True
+        except Exception as e:
+            print(f"Supermemory: write failed ({e}) — continuing without memory")
+            self.key = None
+            return False
+
     def _post(self, path: str, payload: dict) -> dict:
         req = urllib.request.Request(
             API + path,
@@ -50,7 +62,7 @@ class Supermemory:
                     f"{m['best_san'] or '?'} (lost {m['cp_loss']} cp). "
                     f"Position (FEN): {m['fen_before']}"
                 )
-        self._post("/documents", {
+        self._post_safe("/documents", {
             "content": "\n".join(lines),
             "customId": f"game-{g['uuid']}",
             "containerTags": [TAG, user.lower()],
@@ -67,7 +79,7 @@ class Supermemory:
     def remember_session(self, user: str, summary: str) -> None:
         if not self.enabled or not summary:
             return
-        self._post("/documents", {
+        self._post_safe("/documents", {
             "content": f"Coaching session for {user}:\n{summary}",
             "containerTags": [TAG, user.lower()],
             "metadata": {"kind": "coach-session"},
