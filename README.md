@@ -53,10 +53,13 @@ are skipped.
 ## Use
 
 ```bash
-./coach YOUR_USERNAME                                    # last 2 months, 30 games
-./coach YOUR_USERNAME --chat                             # + chat with your coach
-./coach YOUR_USERNAME --months 6 --max-games 100 --movetime 0.2
+./coach YOUR_USERNAME        # first run: introduce yourself once
+./coach                      # after that the coach remembers who you are
+./coach --chat               # chat with your coach
+./coach --months 6 --max-games 100 --movetime 0.2
 ```
+
+Pass a username any time to switch players.
 
 Reports land in `reports/`. Analysis is cached per game in `data/analysis/`,
 so re-runs only pay for new games. Higher `--movetime` = more accurate
