@@ -1,4 +1,4 @@
-"""Local chat coach — Ollama + Llama 8B, fully offline.
+"""Local chat coach — Ollama + Qwen 7B, fully offline.
 
 The model is grounded in the freshly built coaching report; it never
 sees the network, and nothing about your games leaves the machine.
@@ -11,7 +11,7 @@ import urllib.error
 import urllib.request
 
 OLLAMA = "http://localhost:11434"
-MODEL = "llama3.1:8b"
+MODEL = "qwen2.5:7b"
 
 SYSTEM = """You are a friendly but direct chess coach. You are talking to \
 {user} about their recent chess.com games. Base every answer ONLY on the \
