@@ -52,15 +52,20 @@ are skipped.
 
 ## Use
 
+After install, `coach` works from **any folder** — like `claude`, typing
+it bare drops you straight into a conversation with your coach:
+
 ```bash
-./coach                      # first run asks who you are, then remembers
-./coach --chat               # chat with your coach
-./coach --months 6 --max-games 100 --movetime 0.2
+coach                        # talk to your coach (the agent)
+coach report                 # classic coaching report
+coach report --chat          # report + chat grounded in it
+coach report --months 6 --max-games 100 --movetime 0.2
 ```
 
 The first run is a tiny account setup: the coach asks for your chess.com
 username, verifies it actually exists, and never asks again. Pass a
-username any time (`./coach someoneelse`) to switch players.
+username any time (`coach report someoneelse`, `coach agent someoneelse`)
+to switch players.
 
 Reports land in `reports/`. Analysis is cached per game in `data/analysis/`,
 so re-runs only pay for new games. Higher `--movetime` = more accurate
@@ -69,8 +74,8 @@ classification, linearly slower (0.1 s/move ≈ 6 s per game).
 ## Scout your next opponent
 
 ```bash
-./coach scout THEIR_USERNAME             # scouting report
-./coach scout THEIR_USERNAME --chat      # brief with your scout
+coach scout THEIR_USERNAME             # scouting report
+coach scout THEIR_USERNAME --chat      # brief with your scout
 ```
 
 Same engine analysis, pointed at a rival's finished public games: where
@@ -79,15 +84,50 @@ and a **game plan** for facing them. With Supermemory, a **Scout's
 memory** section recalls what you noted about them last time. Pre-game
 prep from public archives only — never live assistance.
 
+## Talk to the coach agent (fully local)
+
+```bash
+coach                        # bare command = the agent, from any folder
+```
+
+The agent turns the coach into something you talk to instead of a
+command you run: ask in plain words and the local model *decides what to
+do* — fetching and engine-analyzing your games, scouting an opponent you
+mention, searching its long-term memory, or saving a note for next time.
+
+```
+you › how am I losing games lately?
+  ♞ analyzing your games … 7/10        ← transient status, erases itself
+coach › Your weakest phase is the endgame (ACPL 172) …
+
+you › scout hikaru                     # unambiguous commands skip the model
+you › what did we work on last time?
+you › remember this: rook endgames this week
+```
+
+Answers stream in live at a calm reading pace; the only thing that stays
+on screen is the conversation itself.
+
+The agent has **true session continuity**: when you quit, it distills the
+conversation into a session summary and stores the transcript in
+Supermemory. Next launch it picks up where you left off — "what did we
+talk about yesterday?" and "did I ever mention panicking in time
+trouble?" both genuinely work, across restarts, all locally.
+
+The brain is Qwen 2.5 7B on your own Ollama; the hands are the same
+Stockfish pipeline and Supermemory store as the CLI. Every analysis it
+runs is remembered, every answer is grounded in real engine numbers,
+and nothing leaves your machine. Post-game only, as always.
+
 ## Chat with your coach (fully local)
 
 ```bash
-./coach YOUR_USERNAME --chat
+coach report --chat
 ```
 
 An interactive coach grounded in your report — "why do I keep losing
 endgames?", "walk me through my worst blunder" — running entirely on
-your machine via Ollama + Llama 3.1 8B. No cloud, no keys, your games
+your machine via Ollama + Qwen 2.5 7B. No cloud, no keys, your games
 never leave your Mac.
 
 ## License
@@ -104,4 +144,7 @@ modify, redistribute, or reuse the code. Feel free to open issues.
   through the homework positions)
 - Opening drill mode (repertoire mining is already in the report)
 - Puzzle export (PGN/Lichess study) from the homework FENs
+- MCP server exposing the same tools, so any MCP client (e.g. Claude
+  Code) can drive the coach with a bigger brain
 - ~~Opponent scouting~~ — shipped (`./coach scout OPPONENT`)
+- ~~Agentic CLI~~ — shipped (`./coach agent`)

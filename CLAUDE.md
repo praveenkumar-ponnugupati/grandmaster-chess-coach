@@ -6,7 +6,7 @@ Guidance for Claude Code sessions working in this repository.
 
 **Grandmaster Chess Coach — chess.com**: local-first, post-game chess coaching
 CLI. Hackathon entry for the Supermemory hackathon (**"localhost:6767", deadline
-2026-07-13 23:59 PST**). Public repo (github.com/praveenkumar-ponnugupati/
+2026-07-18 (Saturday) — extended from 07-13**). Public repo (github.com/praveenkumar-ponnugupati/
 grandmaster-chess-coach) but **NOT open source** — all rights reserved on
 purpose (owner's choice; an early MIT commit was superseded, don't re-add a
 license).
@@ -38,10 +38,18 @@ is the demo hook.
 ## Run & test
 
 ```bash
-./coach praveenkumar1619                # report, memory auto-wired (cached: <1 s)
-./coach praveenkumar1619 --chat         # local chat (Ollama llama3.1:8b, installed)
-./coach hikaru --months 1 --max-games 2 --movetime 0.05   # quick smoke on public account
+coach                                   # bare = agent REPL (like `claude`); global via
+                                        # ~/.local/bin/coach symlink (install.sh step 5)
+coach report praveenkumar1619           # classic report, memory auto-wired (cached: <1 s)
+coach report praveenkumar1619 --chat    # local chat (Ollama qwen2.5:7b, installed)
+coach report hikaru --months 1 --max-games 2 --movetime 0.05  # quick smoke, public account
+printf 'QUESTION\nexit\n' | coach       # non-interactive agent smoke test
 ```
+
+A bare chess.com username still works (`coach hikaru` = classic report);
+`agent`/`report`/`scout` are reserved words routed before username handling.
+The `coach` script resolves symlinks, so venv/data/reports always live in
+the repo no matter the caller's cwd.
 
 `./install.sh` is the one-step installer (idempotent). `./coach` wraps
 `python -m chesscoach`, auto-exporting the Supermemory key from
@@ -49,7 +57,10 @@ is the demo hook.
 The server runs from the repo root so its data lives in `.supermemory/`;
 if :6767 is down, restart:
 `OPENAI_BASE_URL=http://localhost:11434/v1 OPENAI_API_KEY=ollama
-MODEL=llama3.2:3b nohup ~/.local/bin/supermemory-server >> .supermemory/server.log 2>&1 &`
+MODEL=qwen2.5:1.5b nohup ~/.local/bin/supermemory-server >> .supermemory/server.log 2>&1 &`
+(memory model switched from llama3.2:3b to qwen2.5:1.5b 2026-07-13, owner's
+choice; override via MEMORY_MODEL env — the `coach` wrapper and install.sh
+both honor it)
 (Claude cannot run install.sh itself — it contains a curl|bash for the
 Supermemory installer, which the permission layer blocks.)
 
@@ -75,7 +86,42 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 - `memory.py` — Supermemory `/v3/documents` + `/v3/search`; container tags
   `["chess-coach", <user>]`; games deduped by `customId: game-<uuid>`;
   `SUPERMEMORY_BASE_URL` overrides cloud (use `http://localhost:6767` for
-  self-hosted).
+  self-hosted). `search()` is the generic recall; `remember_note` stores
+  agent notes (`kind: coach-note`). Session continuity kinds:
+  `session-summary` (distilled per session) + `chat-transcript` (one raw
+  doc per session; content prefixes "Session summary for …"/"Chat
+  transcript for …" double as recall markers).
+- `pipeline.py` — the shared fetch → analyze → report core; both the CLI
+  path and the agent's tools sit on it (`rated_recent_games`,
+  `analyze_and_report`, `remember_run`, `save_report`).
+- `agent.py` — `./coach agent`: conversational agentic REPL. Ollama
+  tool-calling (qwen2.5:7b — switched from llama3.1:8b 2026-07-13, streamed NDJSON — answer text prints live via
+  `_chat_stream`/`on_text`, paced to STREAM_CHARS_PER_SEC=140 on ttys for
+  a calm typewriter feel (piped output unpaced), tool calls collected
+  mid-stream; `num_ctx` 16384) over four tools: analyze_my_games / scout_opponent /
+  recall_memory / remember_note. Tool execution is invisible by owner's
+  request (2026-07-13): no ⚙/progress/saved lines — a dim transient
+  status ("♞ analyzing your games … 3/10", `_status`/`_clear_status`,
+  tty-only, self-erasing) is the only sign of work; responses are the
+  only persistent output.
+  Session continuity (shipped 2026-07-13): `_persist_session` in a
+  `finally` stores one raw transcript doc + one distilled summary
+  (tool-free `_summarize` call) per session on every exit path;
+  `_last_session_note` preloads the latest summary into the system
+  prompt; recall_memory hides chat-transcript docs unless the question
+  is conversational (`about_chat` regex). Ctrl-C mid-answer aborts the
+  turn, not the session.
+  Persona: warm longtime-coach voice; `_nickname` (first name from the
+  chess.com profile via `fetch.get_profile`, fallback = alpha prefix of
+  the username) is how the coach addresses the player — banner shows
+  "Coaching Praveen (praveenkumar1619)".
+  Guardrails for 8B-grade tool calling: `_clean_args` scrubs invented
+  params + coerces types, MAX_TOOL_ROUNDS=4 caps loops, and bare
+  `scout USERNAME` input bypasses the model entirely (deterministic
+  fast path). Agent analyses default to 10 games for snappy turns and
+  are auto-remembered in Supermemory. Startup shows the GRANDMASTER
+  banner (BANNER + _print_banner: gold art, per-component stack status;
+  ANSI colors only when stdout is a tty).
 
 ## Current state / next steps
 
@@ -89,8 +135,16 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 2. `scout OPPONENT` shipped 2026-07-12 (scout.py; verified on hikaru incl.
    Scout's memory recall + scout chat). Remaining roadmap: v2 local web
    review board (consumes `data/analysis/` JSON), opening drills, puzzle
-   export, progress dashboard over Supermemory.
-3. Nice-to-have fixes: movetime in analysis cache key; chat currently picks
+   export, progress dashboard over Supermemory, MCP server over the same
+   tools.
+3. `agent` shipped 2026-07-12 (agent.py + pipeline.py refactor; `__main__`
+   now routes both classic and agent paths through pipeline.py). All four
+   tools verified end-to-end via `./coach agent hikaru` with the live
+   local stack: analyze_my_games (model-initiated), recall_memory
+   (recalled real stored blunders), scout fast path (magnuscarlsen),
+   remember_note. Piped-stdin testing works:
+   `printf 'QUESTION\nexit\n' | ./coach agent hikaru --movetime 0.05`.
+4. Nice-to-have fixes: movetime in analysis cache key; chat currently picks
    an arbitrary blunder when asked for "worst" (report order helps but the
    LLM can drift).
 
