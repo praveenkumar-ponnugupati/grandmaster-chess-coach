@@ -4,14 +4,17 @@
 # localhost:6767 isn't running it is started automatically, and if memory
 # can't be enabled the coach refuses to run rather than silently forget.
 #
-#   ./coach YOUR_CHESSCOM_USERNAME [--chat] [--months N] ...
+#   coach                       # conversational agent (from any folder)
+#   coach report [USERNAME]     # classic coaching report
+#   coach scout OPPONENT        # scouting report
 set -euo pipefail
-cd "$(dirname "$0")"
+# Resolve symlinks (e.g. ~/.local/bin/coach) so venv/data resolve to the repo
+cd "$(dirname "$(readlink -f "$0")")"
 
 [ -x venv/bin/python ] || { echo "Run ./install.sh first." >&2; exit 1; }
 
 SM_PORT=6767
-MEMORY_MODEL="llama3.2:3b"
+MEMORY_MODEL="${MEMORY_MODEL:-qwen2.5:1.5b}"
 
 server_up() { lsof -iTCP:$SM_PORT -sTCP:LISTEN >/dev/null 2>&1; }
 

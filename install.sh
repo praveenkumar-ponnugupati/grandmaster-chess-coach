@@ -27,15 +27,15 @@ else
     cd "$DEST"
 fi
 
-CHAT_MODEL="llama3.1:8b"     # chat coach (~5 GB)
-MEMORY_MODEL="llama3.2:3b"   # supermemory's LLM (~2 GB)
+CHAT_MODEL="qwen2.5:7b"      # chat coach (~4.7 GB)
+MEMORY_MODEL="${MEMORY_MODEL:-qwen2.5:1.5b}"   # supermemory's LLM (~1 GB)
 SM_PORT=6767
 
 ok()   { printf '  \033[32m✓\033[0m %s\n' "$1"; }
 step() { printf '\033[1m%s\033[0m\n' "$1"; }
 fail() { printf '  \033[31m✗ %s\033[0m\n' "$1"; exit 1; }
 
-step "[1/5] Stockfish"
+step "[1/6] Stockfish"
 if command -v stockfish >/dev/null; then
     ok "already installed ($(command -v stockfish))"
 else
@@ -44,7 +44,7 @@ else
     ok "installed"
 fi
 
-step "[2/5] Ollama + local models"
+step "[2/6] Ollama + local models"
 if ! command -v ollama >/dev/null; then
     command -v brew >/dev/null || fail "Homebrew required — install it from https://brew.sh first"
     brew install ollama
@@ -68,7 +68,7 @@ for model in "$CHAT_MODEL" "$MEMORY_MODEL"; do
     fi
 done
 
-step "[3/5] Python environment"
+step "[3/6] Python environment"
 if [ -x venv/bin/python ] && venv/bin/python -c 'import chess' 2>/dev/null; then
     ok "venv ready ($(venv/bin/python -V))"
 else
@@ -88,7 +88,7 @@ else
     ok "venv created with $("$PY" -V), python-chess installed"
 fi
 
-step "[4/5] Supermemory server (self-hosted, localhost:${SM_PORT})"
+step "[4/6] Supermemory server (self-hosted, localhost:${SM_PORT})"
 SM_BIN="$(command -v supermemory-server || true)"
 [ -z "$SM_BIN" ] && [ -x "$HOME/.local/bin/supermemory-server" ] && SM_BIN="$HOME/.local/bin/supermemory-server"
 if [ -z "$SM_BIN" ]; then
@@ -115,7 +115,19 @@ else
     ok "server running on :${SM_PORT} (API key saved in .supermemory/)"
 fi
 
-step "[5/5] Verify"
+step "[5/6] Global command"
+mkdir -p "$HOME/.local/bin"
+ln -sf "$PWD/coach" "$HOME/.local/bin/coach"
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*)
+        ok "'coach' available from any folder ($HOME/.local/bin/coach)" ;;
+    *)
+        echo "  ~/.local/bin isn't on your PATH yet — add it with:"
+        echo "    echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && exec zsh"
+        ok "linked $HOME/.local/bin/coach (PATH note above)" ;;
+esac
+
+step "[6/6] Verify"
 [ -x "$(command -v stockfish)" ] || fail "stockfish missing"
 venv/bin/python -c 'import chess' || fail "python-chess missing"
 curl -s -m 3 http://localhost:11434/api/tags >/dev/null || fail "ollama not responding"
@@ -124,11 +136,11 @@ ok "all components up"
 
 cat <<EOF
 
-Done. Get coached:
+Done. Get coached — from any folder:
 
-    cd $PWD
-    ./coach YOUR_CHESSCOM_USERNAME            # coaching report
-    ./coach YOUR_CHESSCOM_USERNAME --chat     # + chat with your coach
+    coach                             # talk to your coach (agent)
+    coach report                      # classic coaching report
+    coach scout THEIR_USERNAME        # scout your next opponent
 
 Everything runs on your machine — the only network use is fetching
 your own finished games from chess.com's public API.

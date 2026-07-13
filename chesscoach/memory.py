@@ -91,6 +91,39 @@ class Supermemory:
             "metadata": {"kind": "coach-session"},
         })
 
+    def remember_note(self, user: str, note: str) -> None:
+        """A free-form coaching note (the agent saves these mid-conversation)."""
+        if not self.enabled or not note:
+            return
+        self._post_safe("/documents", {
+            "content": f"Coach note for {user}: {note}",
+            "containerTags": [TAG, user.lower()],
+            "metadata": {"kind": "coach-note"},
+        })
+
+    def remember_session_summary(self, user: str, summary: str) -> None:
+        """Durable 'what we covered' distillation of one agent session —
+        the narrative half of session continuity."""
+        if not self.enabled or not summary:
+            return
+        self._post_safe("/documents", {
+            "content": f"Session summary for {user}: {summary}",
+            "containerTags": [TAG, user.lower()],
+            "metadata": {"kind": "session-summary"},
+        })
+
+    def remember_transcript(self, user: str, transcript: str) -> None:
+        """One document per agent session holding the raw conversation —
+        the verbatim half of session continuity (Supermemory chunks it
+        for retrieval; one doc per session keeps write cost at one pass)."""
+        if not self.enabled or not transcript:
+            return
+        self._post_safe("/documents", {
+            "content": f"Chat transcript for {user}: {transcript}",
+            "containerTags": [TAG, user.lower()],
+            "metadata": {"kind": "chat-transcript"},
+        })
+
     def remember_scout(self, opponent: str, summary: str) -> None:
         if not self.enabled or not summary:
             return
@@ -112,7 +145,9 @@ class Supermemory:
             f"scouting report, weaknesses and game plan against {opponent}",
             opponent, "Scouting report", limit)
 
-    def _recall(self, query: str, user: str, marker: str, limit: int) -> list[str]:
+    def search(self, query: str, user: str, limit: int = 5) -> list[str]:
+        """Free-text memory search over everything stored for this player
+        (games, sessions, scout reports, notes), most relevant first."""
         if not self.enabled:
             return []
         try:
@@ -130,6 +165,9 @@ class Supermemory:
             text = (r.get("memory") or r.get("content")
                     or " ".join(c.get("content", "")
                                 for c in r.get("chunks", []) if isinstance(c, dict)))
-            if text and marker in text:
+            if text:
                 notes.append(text.strip())
         return notes
+
+    def _recall(self, query: str, user: str, marker: str, limit: int) -> list[str]:
+        return [n for n in self.search(query, user, limit) if marker in n]
