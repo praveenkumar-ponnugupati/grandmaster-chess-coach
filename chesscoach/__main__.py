@@ -1,8 +1,11 @@
 """chess-coach CLI: fetch chess.com games, engine-analyze, coach.
 
 Usage:
-    python -m chesscoach [USERNAME] [--months 2] [--max-games 30]
-                         [--movetime 0.1] [--out reports] [--chat]
+    python -m chesscoach                    # conversational agent (local LLM)
+    python -m chesscoach agent [USERNAME]   # same, coaching USERNAME
+    python -m chesscoach report [USERNAME] [--months 2] [--max-games 30]
+                                [--movetime 0.1] [--out reports] [--chat]
+    python -m chesscoach USERNAME           # classic report, same options
     python -m chesscoach scout OPPONENT [same options]
 """
 import argparse
@@ -11,13 +14,10 @@ import sys
 import urllib.error
 from pathlib import Path
 
-import chess.engine
-
-from .analyze import analyze_game
-from .fetch import fetch_games, player_exists
+from .fetch import player_exists
 from .memory import Supermemory
-from .report import build_report, coach_note_texts
-from .scout import build_scout_report, scout_note_texts
+from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
+                       remember_run, save_report)
 
 
 def _account_setup() -> str:
@@ -43,10 +43,13 @@ def _account_setup() -> str:
 def main() -> int:
     p = argparse.ArgumentParser(prog="chess-coach")
     p.add_argument("username", nargs="?",
-                   help="chess.com username (remembered after the first run), "
-                        "or 'scout' to scout an opponent")
+                   help="nothing or 'agent' for the conversational coach, "
+                        "'report' or a chess.com username for the classic "
+                        "report, 'scout' to scout an opponent")
     p.add_argument("opponent", nargs="?",
-                   help="with 'scout': the opponent's chess.com username")
+                   help="with 'scout': the opponent's chess.com username; "
+                        "with 'agent'/'report': who to coach "
+                        "(default: remembered user)")
     p.add_argument("--months", type=int, default=2, help="monthly archives to fetch (default 2)")
     p.add_argument("--max-games", type=int, default=30, help="analyze at most N most recent games")
     p.add_argument("--movetime", type=float, default=0.1,
@@ -55,7 +58,7 @@ def main() -> int:
     p.add_argument("--out", default="reports", help="report output directory")
     p.add_argument("--chat", action="store_true",
                    help="after analysis, chat with the coach about your games "
-                        "(fully local: Ollama + Llama 8B)")
+                        "(fully local: Ollama + Qwen 7B)")
     args = p.parse_args()
 
     if not args.engine:
@@ -66,9 +69,13 @@ def main() -> int:
     data_dir = root / "data"
     last_user = data_dir / "last-user"
     scouting = args.username == "scout"
+    # Like `claude`: a bare `coach` drops straight into the conversation
+    agent_mode = args.username in ("agent", None)
+    if args.username in ("agent", "report"):
+        args.username = args.opponent  # optional explicit player
     if scouting:
         if not args.opponent:
-            p.error("usage: ./coach scout OPPONENT")
+            p.error("usage: coach scout OPPONENT")
         args.username = args.opponent
     elif not args.username:
         if last_user.exists():
@@ -77,54 +84,57 @@ def main() -> int:
         elif sys.stdin.isatty():
             args.username = _account_setup()
         else:
-            p.error("username required on the first run, e.g.: ./coach magnuscarlsen")
+            p.error("username required on the first run, e.g.: coach magnuscarlsen")
+
+    def remember_username():
+        # The username is confirmed real; remember it for next time
+        if not scouting:
+            data_dir.mkdir(parents=True, exist_ok=True)
+            last_user.write_text(args.username.lower())
+
+    if agent_mode:
+        from .agent import agent_loop
+        from .chat import ollama_ready
+        problem = ollama_ready()
+        if problem:
+            print(problem, file=sys.stderr)
+            return 1
+        if not player_exists(args.username):
+            print(f"chess.com doesn't know a player called '{args.username}' — "
+                  "check the spelling (see chess.com/member/<username>).",
+                  file=sys.stderr)
+            return 1
+        remember_username()
+        agent_loop(args.username, args.engine, data_dir, root / args.out,
+                   movetime=args.movetime)
+        return 0
+
     print(f"Fetching games for {args.username} …")
     try:
-        games = fetch_games(args.username, args.months, data_dir / "archives")
+        games = rated_recent_games(args.username, args.months, args.max_games,
+                                   data_dir)
     except urllib.error.HTTPError as e:
         if e.code == 404:
             print(f"chess.com doesn't know a player called '{args.username}' — "
                   "check the spelling (see chess.com/member/<username>).", file=sys.stderr)
             return 1
         raise
-    if not scouting:
-        # Fetch succeeded → the username is real; remember it for next time
-        data_dir.mkdir(parents=True, exist_ok=True)
-        last_user.write_text(args.username.lower())
-    # Rated standard-chess games only; newest first
-    games = [g for g in games if g.get("rules") == "chess" and g.get("rated")]
-    games.sort(key=lambda g: g.get("end_time", 0), reverse=True)
-    games = games[: args.max_games]
-    if not games:
-        print("No rated games found — check the username or raise --months.", file=sys.stderr)
+    except NoGamesError as e:
+        remember_username()  # the fetch itself succeeded
+        print(e, file=sys.stderr)
         return 1
+    remember_username()
     print(f"Analyzing {len(games)} games at {args.movetime:.2f}s/move "
           "(cached games are instant) …")
 
-    analyzed = []
-    with chess.engine.SimpleEngine.popen_uci(args.engine) as engine:
-        for i, g in enumerate(games, 1):
-            result = analyze_game(g, args.username, engine, args.movetime,
-                                  data_dir / "analysis")
-            if result and result["moves"]:
-                analyzed.append(result)
-            print(f"\r  {i}/{len(games)}", end="", flush=True)
+    memory = Supermemory()
+    report, analyzed, past_notes = analyze_and_report(
+        args.username, games, engine_path=args.engine, movetime=args.movetime,
+        data_dir=data_dir, memory=memory, scouting=scouting,
+        progress=lambda i, n: print(f"\r  {i}/{n}", end="", flush=True))
     print()
 
-    memory = Supermemory()
-    if scouting:
-        past_notes = memory.recall_scouting(args.username)
-        report = build_scout_report(args.username, analyzed, past_notes=past_notes)
-        out_name = f"scout-{args.username.lower()}.md"
-    else:
-        past_notes = memory.recall_coaching(args.username)
-        report = build_report(args.username, analyzed, past_notes=past_notes)
-        out_name = f"{args.username.lower()}-coach-report.md"
-
-    out_dir = root / args.out
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_file = out_dir / out_name
-    out_file.write_text(report)
+    out_file = save_report(report, args.username, root / args.out, scouting)
 
     if args.chat:
         from .chat import chat_loop, ollama_ready
@@ -138,15 +148,7 @@ def main() -> int:
     print(f"\nSaved: {out_file}")
 
     if memory.enabled:
-        for g in analyzed:
-            memory.remember_game(args.username, g)
-        if scouting:
-            memory.remember_scout(args.username,
-                                  "\n".join(scout_note_texts(analyzed)))
-        else:
-            memory.remember_session(args.username,
-                                    "\n".join(coach_note_texts(analyzed)))
-        if memory.enabled:  # still true only if no write failed mid-way
+        if remember_run(memory, args.username, analyzed, scouting):
             what = "scouting notes" if scouting else "this session's advice"
             print(f"Supermemory: remembered {len(analyzed)} games + {what}"
                   f" (recalled {len(past_notes)} earlier note(s))")

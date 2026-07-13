@@ -17,6 +17,15 @@ def _get_json(url: str) -> dict:
         return json.load(resp)
 
 
+def get_profile(user: str) -> dict:
+    """Public profile blob (display name, title, …); {} if unavailable —
+    callers treat the profile as a nicety, never a requirement."""
+    try:
+        return _get_json(PROFILE_URL.format(user=user.lower()))
+    except Exception:
+        return {}
+
+
 def player_exists(user: str) -> bool:
     """True if chess.com knows this username."""
     try:
