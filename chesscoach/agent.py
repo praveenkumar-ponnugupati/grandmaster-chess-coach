@@ -576,11 +576,36 @@ def _openings_panel(recs: dict, color: bool | None = None,
 
 
 def _spark(vals: list[int]) -> str:
-    """Values mapped onto ▁▂▃▄▅▆▇█ (min–max scaled)."""
+    """Values mapped onto ▁▂▃▄▅▆▇█ (min–max scaled). A flat series stays a
+    thin baseline — a row of mid-blocks reads as a solid slab, not a trend."""
     lo, hi = min(vals), max(vals)
     if hi == lo:
-        return "▄" * len(vals)
+        return "▂" * len(vals)
     return "".join(SPARK_CHARS[round((v - lo) / (hi - lo) * 7)] for v in vals)
+
+
+def _spark_demo() -> None:
+    """Glyph/alignment test — run in YOUR terminal to check the font:
+    ./venv/bin/python -c "from chesscoach.agent import _spark_demo; _spark_demo()"
+    Every block below must be uniform width on one shared baseline."""
+    dim, gold, off = "\033[2m", "\033[1;33m", "\033[0m"
+    print(f"8-level ramp:  {''.join(SPARK_CHARS)}   "
+          f"(spaced: {' '.join(SPARK_CHARS)})")
+    print(f"4-level ramp:  ▁▃▅▇   (fallback if the 8-level looks ragged)")
+    print()
+    cases = [("rising", [1, 2, 3, 4, 5, 6, 7, 8]),
+             ("falling", [8, 7, 6, 5, 4, 3, 2, 1]),
+             ("flat", [400] * 10),
+             ("noisy", [520, 480, 526, 450, 500, 470, 510]),
+             ("two-vals", [100, 200])]
+    for name, vals in cases:
+        print(f"  {name:<9} {_spark(vals)}   {dim}{vals}{off}")
+    print()
+    print("header mock (fixed columns, dim sparks):")
+    for tc, r, vals in (("daily", 400, [400] * 10),
+                        ("rapid", 526, [520, 480, 450, 400, 470, 526]),
+                        ("blitz", 100, [180, 160, 100, 100, 100])):
+        print(f"   {tc:<6} {gold}{r:>4}{off} {dim}{_spark(vals)}{off}")
 
 
 def _my_side(game: dict, user: str) -> dict:
@@ -673,7 +698,9 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
     trends = _rating_trends(user, games or [])
     if trends:
         for tc, ratings, delta in trends[:3]:
-            line = f"{tc:<6} {gold}{ratings[-1]}{off} {_spark(ratings)}"
+            # fixed columns: name(6) rating(4, gold) spark(dim) delta
+            line = (f"{tc:<6} {gold}{ratings[-1]:>4}{off} "
+                    f"{dim}{_spark(ratings)}{off}")
             if delta:
                 arrow = (f"{green}↑{delta}" if delta > 0
                          else f"{red}↓{-delta}")
