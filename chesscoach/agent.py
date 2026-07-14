@@ -19,6 +19,11 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
+import chess
+import chess.engine
+
+from .analyze import _user_result as _game_result  # same-package helper
+from .board import render_board
 from .chat import MODEL, OLLAMA
 from .fetch import get_profile, get_stats
 from .memory import Supermemory
@@ -50,6 +55,11 @@ weaknesses, blunders, openings.
 - scout_opponent: when {user} names an opponent they will face.
 - recall_memory: past sessions, stored games, earlier advice, progress over time.
 - remember_note: save advice or plans worth keeping for future sessions.
+- show_position: draw a chess board in the terminal. MANDATORY: before \
+answering anything about one specific position or blunder, call \
+show_position with its FEN exactly as the report gives it (plus the \
+played and best moves), then narrate the idea. Never paste raw FEN \
+strings into an answer — the player sees boards, not FENs.
 Ground every claim in tool results — never invent games, moves or numbers; \
 cite move numbers and moves exactly as the reports state them. If the \
 reports can't answer something, say so honestly.
@@ -104,6 +114,22 @@ TOOLS = [
             "note": {"type": "string", "description": "the note to remember"},
         }, "required": ["note"]},
     }},
+    {"type": "function", "function": {
+        "name": "show_position",
+        "description": "Draw a chess position as a board in the terminal, "
+                       "with the played move marked red, the best move "
+                       "green, and an engine eval bar. Use when discussing "
+                       "any specific position from a report.",
+        "parameters": {"type": "object", "properties": {
+            "fen": {"type": "string",
+                    "description": "the position FEN, exactly as the report "
+                                   "states it"},
+            "played_san": {"type": "string",
+                           "description": "the move that was actually played"},
+            "best_san": {"type": "string",
+                         "description": "the better move that was missed"},
+        }, "required": ["fen"]},
+    }},
 ]
 
 
@@ -118,6 +144,22 @@ def _status(text: str) -> None:
 def _clear_status() -> None:
     if sys.stdout.isatty():
         print("\r\033[K", end="", flush=True)
+
+
+# A FEN in prose (the model was told not to, but small models slip)
+_FEN_RE = re.compile(
+    r"(?:[rnbqkpRNBQKP1-8]+/){7}[rnbqkpRNBQKP1-8]+ [wb] "
+    r"(?:K?Q?k?q?|-) (?:[a-h][36]|-) \d+ \d+")
+
+
+def _maybe_show_fen_board(reply: str, tools) -> None:
+    """Safety net: if an answer slipped a FEN into prose, draw it anyway."""
+    m = _FEN_RE.search(reply)
+    if m:
+        try:
+            tools.call("show_position", {"fen": m.group(0)})
+        except Exception:
+            pass
 
 
 # name → {param: declared type}, for scrubbing model-invented arguments
@@ -224,6 +266,33 @@ class CoachTools:
         self.memory.remember_note(self.user, note)
         return "Saved to long-term memory."
 
+    def _tool_show_position(self, fen: str, played_san: str | None = None,
+                            best_san: str | None = None) -> str:
+        try:
+            board = chess.Board(fen)
+        except ValueError:
+            return "Error: that is not a valid FEN — copy it exactly from the report."
+        cp = engine_best = None
+        try:  # a quick engine look gives the eval bar + a best move if missing
+            with chess.engine.SimpleEngine.popen_uci(self.engine_path) as eng:
+                info = eng.analyse(board, chess.engine.Limit(time=0.2))
+                cp = info["score"].white().score(mate_score=1500)
+                if info.get("pv"):
+                    engine_best = board.san(info["pv"][0])
+        except Exception:
+            pass
+        best = best_san or engine_best
+        _clear_status()
+        print("\n" + render_board(fen, best=best, played=played_san,
+                                  eval_cp=cp) + "\n")
+        turn = "White" if board.turn == chess.WHITE else "Black"
+        out = f"(board displayed to the player) {turn} to move"
+        if cp is not None:
+            out += f"; engine eval {cp / 100:+.1f} from White's side"
+        if best:
+            out += f"; best move here is {best}"
+        return out + ". Now narrate the key idea in it for the player."
+
 
 def _chat_stream(messages: list[dict], model: str, on_text) -> dict:
     """One streamed model response. Text pieces go to `on_text` as they
@@ -290,6 +359,7 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
                 _clear_status()
                 print("coach › (no answer — try rephrasing)", end="")
             print("\n")
+            _maybe_show_fen_board(reply, tools)
             messages.append({"role": "assistant", "content": reply})
             return reply
         if started:  # the model spoke before deciding to use a tool
@@ -309,6 +379,7 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
                 "scout_opponent": f"scouting {args.get('opponent', 'them')} …",
                 "recall_memory": "checking my memory …",
                 "remember_note": "noting that down …",
+                "show_position": "setting up the board …",
             }.get(name, "working …"))
             messages.append({"role": "tool", "content": tools.call(name, args)})
     _clear_status()
@@ -407,6 +478,57 @@ BANNER = """\
 ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"""
 
 
+SPARK_CHARS = "▁▂▃▄▅▆▇█"
+WEEK_SECONDS = 7 * 86400
+
+
+def _spark(vals: list[int]) -> str:
+    """Values mapped onto ▁▂▃▄▅▆▇█ (min–max scaled)."""
+    lo, hi = min(vals), max(vals)
+    if hi == lo:
+        return "▄" * len(vals)
+    return "".join(SPARK_CHARS[round((v - lo) / (hi - lo) * 7)] for v in vals)
+
+
+def _my_side(game: dict, user: str) -> dict:
+    white = game.get("white") or {}
+    if white.get("username", "").lower() == user.lower():
+        return white
+    return game.get("black") or {}
+
+
+def _rating_trends(user: str, games: list[dict]
+                   ) -> list[tuple[str, list[int], int | None]]:
+    """Per time class (most-played first): chronological ratings for the
+    last ≤15 games and the rating change vs one week ago (None if the
+    window has no game that old). `games` arrive newest-first."""
+    per: dict[str, list[tuple[int, int]]] = {}
+    for g in games:
+        rating = _my_side(g, user).get("rating")
+        if not rating:
+            continue
+        per.setdefault(g.get("time_class", "?"), []).append(
+            (g.get("end_time", 0), rating))
+    out = []
+    for tc, entries in sorted(per.items(), key=lambda kv: -len(kv[1])):
+        latest_t, latest_r = entries[0]
+        delta = next((latest_r - r for t, r in entries
+                      if t <= latest_t - WEEK_SECONDS), None)
+        ratings = [r for _, r in reversed(entries[:15])]
+        out.append((tc, ratings, delta))
+    return out
+
+
+def _streak(user: str, games: list[dict], n: int = 12) -> list[str]:
+    """win/draw/loss of the last n games, oldest → newest."""
+    results = []
+    for g in reversed(games[:n]):
+        is_white = (g.get("white") or {}).get(
+            "username", "").lower() == user.lower()
+        results.append(_game_result(g, is_white))
+    return results
+
+
 def _stats_line(stats: dict) -> str | None:
     """'blitz 100 · rapid 526 · 39W/53L/4D lifetime' from chess.com stats."""
     parts, w, l, d = [], 0, 0, 0
@@ -444,7 +566,8 @@ def _watchlist(last_note: str | None) -> str | None:
 def _print_banner(user: str, engine_path: str, memory: Supermemory,
                   model: str, nick: str | None = None,
                   stats: dict | None = None,
-                  watchlist: str | None = None) -> None:
+                  watchlist: str | None = None,
+                  games: list[dict] | None = None) -> None:
     tty = sys.stdout.isatty()
     def c(code):
         return f"\033[{code}m" if tty else ""
@@ -454,9 +577,25 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
           f"100% local, nothing leaves this machine{off}\n")
     who = f"{nick} ({user})" if nick and nick.lower() != user.lower() else user
     print(f"   Coaching {gold}{who}{off}")
-    line = _stats_line(stats or {})
-    if line:
-        print(f"   {line}")
+    trends = _rating_trends(user, games or [])
+    if trends:
+        for tc, ratings, delta in trends[:3]:
+            line = f"{tc:<6} {gold}{ratings[-1]}{off} {_spark(ratings)}"
+            if delta:
+                arrow = (f"{green}↑{delta}" if delta > 0
+                         else f"{red}↓{-delta}")
+                line += f" {arrow}{off}{dim} this week{off}"
+            print(f"   {line}")
+        marks = {"win": f"{green}█", "loss": f"{red}█", "draw": f"{dim}█"}
+        streak = _streak(user, games or [])
+        if streak:
+            blocks = "".join(marks[r] for r in streak) + off
+            print(f"   {dim}last {len(streak)}:{off} {blocks} "
+                  f"{dim}(oldest → newest){off}")
+    else:  # no recent games fetched — fall back to profile snapshot
+        line = _stats_line(stats or {})
+        if line:
+            print(f"   {line}")
     if watchlist:
         print(f"   ♞ coach's watchlist: {gold}{watchlist}{off}"
               f"{dim} — from your last session{off}")
@@ -484,8 +623,13 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                    "(use it to keep continuity — refer back naturally):\n"
                    + last_note)
     messages = [{"role": "system", "content": system}]
+    try:  # recent games power the header trends; never block startup on them
+        recent = rated_recent_games(user, 2, 60, data_dir)
+    except Exception:
+        recent = []
     _print_banner(user, engine_path, tools.memory, model, nick,
-                  stats=get_stats(user), watchlist=_watchlist(last_note))
+                  stats=get_stats(user), watchlist=_watchlist(last_note),
+                  games=recent)
     try:
         while True:
             try:
