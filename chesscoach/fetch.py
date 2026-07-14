@@ -26,6 +26,14 @@ def get_profile(user: str) -> dict:
         return {}
 
 
+def get_stats(user: str) -> dict:
+    """Public rating/record stats; {} if unavailable (nicety, not required)."""
+    try:
+        return _get_json(PROFILE_URL.format(user=user.lower()) + "/stats")
+    except Exception:
+        return {}
+
+
 def player_exists(user: str) -> bool:
     """True if chess.com knows this username."""
     try:

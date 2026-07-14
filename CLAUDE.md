@@ -120,8 +120,13 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
   `scout USERNAME` input bypasses the model entirely (deterministic
   fast path). Agent analyses default to 10 games for snappy turns and
   are auto-remembered in Supermemory. Startup shows the GRANDMASTER
-  banner (BANNER + _print_banner: gold art, per-component stack status;
-  ANSI colors only when stdout is a tty).
+  banner (BANNER + _print_banner, ANSI colors only when stdout is a tty):
+  player-facing stats up top — ratings/lifetime record via
+  `fetch.get_stats` (`_stats_line`) + a "coach's watchlist" phrase
+  keyword-matched from the last session note (`_watchlist`, no model
+  call) — and the stack status collapsed to one dim "all local … ✓"
+  line that expands to a red ✗ only when memory is OFF (owner's call
+  2026-07-13: user stats beat component status).
 
 ## Current state / next steps
 

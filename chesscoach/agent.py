@@ -20,7 +20,7 @@ from datetime import date
 from pathlib import Path
 
 from .chat import MODEL, OLLAMA
-from .fetch import get_profile
+from .fetch import get_profile, get_stats
 from .memory import Supermemory
 from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
                        remember_run, save_report)
@@ -407,8 +407,44 @@ BANNER = """\
 ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"""
 
 
+def _stats_line(stats: dict) -> str | None:
+    """'blitz 100 · rapid 526 · 39W/53L/4D lifetime' from chess.com stats."""
+    parts, w, l, d = [], 0, 0, 0
+    for key, label in (("chess_blitz", "blitz"), ("chess_rapid", "rapid"),
+                       ("chess_bullet", "bullet")):
+        tc = stats.get(key) or {}
+        rating = (tc.get("last") or {}).get("rating")
+        if rating:
+            parts.append(f"{label} {rating}")
+        rec = tc.get("record") or {}
+        w += rec.get("win") or 0
+        l += rec.get("loss") or 0
+        d += rec.get("draw") or 0
+    if w + l + d:
+        parts.append(f"{w}W/{l}L/{d}D lifetime")
+    return " · ".join(parts) if parts else None
+
+
+def _watchlist(last_note: str | None) -> str | None:
+    """One phrase from the last session worth flashing at startup."""
+    if not last_note:
+        return None
+    for key, label in (("endgame", "endgame technique"),
+                       ("clock", "clock management"),
+                       ("time trouble", "clock management"),
+                       ("middlegame", "middlegame play"),
+                       ("opening", "opening prep"),
+                       ("blunder", "blunder-checking when winning"),
+                       ("tactic", "tactics")):
+        if key in last_note.lower():
+            return label
+    return None
+
+
 def _print_banner(user: str, engine_path: str, memory: Supermemory,
-                  model: str, nick: str | None = None) -> None:
+                  model: str, nick: str | None = None,
+                  stats: dict | None = None,
+                  watchlist: str | None = None) -> None:
     tty = sys.stdout.isatty()
     def c(code):
         return f"\033[{code}m" if tty else ""
@@ -416,21 +452,23 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
     print(f"\n{gold}{BANNER}{off}")
     print(f"{dim}        ♞  your grandmaster chess coach — "
           f"100% local, nothing leaves this machine{off}\n")
-    mem_host = memory.api.removesuffix("/v3").replace("http://", "").replace(
-        "https://", "")
-    # Engine and brain were health-checked before the loop started
-    rows = [
-        (True, "Engine", f"Stockfish · {engine_path}"),
-        (True, "Brain", f"{model} · Ollama (localhost:11434)"),
-        (memory.enabled, "Memory",
-         f"Supermemory · {mem_host} — long-term memory "
-         + ("ON" if memory.enabled else "OFF (run via ./coach to enable)")),
-    ]
-    for healthy, label, detail in rows:
-        mark = f"{green}✓{off}" if healthy else f"{red}✗{off}"
-        print(f"   {mark} {label:<7} {dim}{detail}{off}")
     who = f"{nick} ({user})" if nick and nick.lower() != user.lower() else user
-    print(f"\n   Coaching {gold}{who}{off} — ask anything:")
+    print(f"   Coaching {gold}{who}{off}")
+    line = _stats_line(stats or {})
+    if line:
+        print(f"   {line}")
+    if watchlist:
+        print(f"   ♞ coach's watchlist: {gold}{watchlist}{off}"
+              f"{dim} — from your last session{off}")
+    # Engine and brain were health-checked before the loop started; memory
+    # is the only component that can be down here — whisper when healthy,
+    # shout only when something is actually wrong
+    if memory.enabled:
+        print(f"\n{dim}   all local: Stockfish + {model} + Supermemory "
+              f"{off}{green}✓{off}")
+    else:
+        print(f"\n   {red}✗ Memory{off} {dim}Supermemory is OFF — memories "
+              f"won't be kept; run via ./coach to enable{off}")
     print(f'{dim}   "how am I losing games?" · "scout hikaru" · '
           f'"what did we work on last time?" · exit to quit{off}\n')
 
@@ -446,7 +484,8 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                    "(use it to keep continuity — refer back naturally):\n"
                    + last_note)
     messages = [{"role": "system", "content": system}]
-    _print_banner(user, engine_path, tools.memory, model, nick)
+    _print_banner(user, engine_path, tools.memory, model, nick,
+                  stats=get_stats(user), watchlist=_watchlist(last_note))
     try:
         while True:
             try:
