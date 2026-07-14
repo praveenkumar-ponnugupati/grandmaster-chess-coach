@@ -70,8 +70,15 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 
 ## Architecture (one line each)
 
-- `fetch.py` — chess.com public API (UA header required); monthly archives
-  cached in `data/archives/`, completed months immutable, current month always refetched.
+- `chesscom.py` — the chess.com DATA LAYER (replaced fetch.py 2026-07-14):
+  all public-API access (UA header required), month-cached archives
+  (completed months immutable, current month refetched),
+  `parse_game`/`parse_games` (result/color/opponent+rating/time
+  control/ECO+opening/termination/my-rating; PGN kept for the engine
+  pass), and engine-free derived stats: `rating_trends`, `record`,
+  `opening_records` ("Opening (Color)" keys), `rating_buckets` (±100),
+  `endings` (termination mix — the timeout insight lives here).
+  "What happened" = this module; "why" = Stockfish in analyze.py, on top.
 - `analyze.py` — Stockfish evals of the user's moves only; cp-loss classes
   50/100/250; mate folded to ±1500; cached per game uuid in `data/analysis/`.
   KNOWN LIMITATION: `--movetime` is not part of the cache key.
@@ -111,9 +118,13 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
   show_openings. show_openings renders `_openings_panel` (win% bars
   from PGN ECOUrl headers, worst flagged "◀ fix this", dim `_rule`
   dividers) and returns a facts string so the coach narrates numbers
-  matching the chart; bare `openings` input is a deterministic fast
-  path like `scout`. PGNs carry `%clk` — clock analysis is feasible
-  (verified 2026-07-14). Tool execution is invisible by owner's
+  matching the chart; show_endings (7th tool) renders `_endings_panel`
+  (termination mix + red timeout flag + rating buckets) — "how am I
+  losing" prompts call openings+endings; `stats` input is a fast path
+  (trends block + `_record_panel` W/L/D by color/time class), bare
+  `openings` likewise. Real data insight found 2026-07-14: 59% of the
+  owner's losses are timeouts; 0W/10L as White. PGNs carry `%clk` —
+  engine clock analysis is feasible later. Tool execution is invisible by owner's
   request (2026-07-13): no ⚙/progress/saved lines — a dim transient
   status ("♞ analyzing your games … 3/10", `_status`/`_clear_status`,
   tty-only, self-erasing) is the only sign of work; responses are the

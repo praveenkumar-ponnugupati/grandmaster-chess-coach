@@ -55,9 +55,13 @@ weaknesses, blunders, openings.
 - scout_opponent: when {user} names an opponent they will face.
 - recall_memory: past sessions, stored games, earlier advice, progress over time.
 - remember_note: save advice or plans worth keeping for future sessions.
-- show_openings: draw a win-rate-by-opening bar chart. Call it when {user} \
-asks how/where they are losing games or anything about their openings, \
-then narrate the standout — name the worst opening and its numbers.
+- show_openings: draw a win-rate-by-opening bar chart. Call it for anything \
+about {user}'s openings, then narrate the standout — name the worst \
+opening and its numbers.
+- show_endings: draw how {user}'s games end (checkmate/resignation/timeout) \
+and their score vs lower/similar/higher-rated opponents. When {user} asks \
+how or why they are losing, call BOTH show_openings and show_endings, then \
+narrate the one insight that matters most.
 - show_position: draw a chess board in the terminal. MANDATORY: before \
 answering anything about one specific position or blunder, call \
 show_position with its FEN exactly as the report gives it (plus the \
@@ -123,6 +127,19 @@ TOOLS = [
                        "results by opening (win%, games, net score, worst "
                        "flagged). Use when asked how/where they lose games "
                        "or about their opening repertoire.",
+        "parameters": {"type": "object", "properties": {
+            "months": {"type": "integer",
+                       "description": "monthly archives to include (default 2)"},
+            "max_games": {"type": "integer",
+                          "description": "recent games to include (default 60)"},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "show_endings",
+        "description": "Draw how the player's games end (termination mix, "
+                       "timeout flag) plus their score vs lower/similar/"
+                       "higher-rated opponents. Use alongside show_openings "
+                       "for how/why-am-I-losing questions.",
         "parameters": {"type": "object", "properties": {
             "months": {"type": "integer",
                        "description": "monthly archives to include (default 2)"},
@@ -298,6 +315,16 @@ class CoachTools:
                 "standout numbers — especially the worst opening — in your "
                 "own coaching voice; do not repeat the whole table.")
 
+    def _tool_show_endings(self, months: int = 2, max_games: int = 60) -> str:
+        parsed = self._parsed_recent(months, max_games)
+        if not parsed:
+            return "No recent games found."
+        panel, facts = _endings_panel(parsed)
+        _clear_status()
+        print("\n" + panel + "\n")
+        return (f"(chart displayed to the player) {facts}. Narrate the one "
+                "insight that matters most in your own coaching voice.")
+
     def _tool_show_position(self, fen: str, played_san: str | None = None,
                             best_san: str | None = None) -> str:
         try:
@@ -413,6 +440,7 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
                 "remember_note": "noting that down …",
                 "show_position": "setting up the board …",
                 "show_openings": "charting your openings …",
+                "show_endings": "checking how your games end …",
             }.get(name, "working …"))
             messages.append({"role": "tool", "content": tools.call(name, args)})
     _clear_status()
@@ -601,6 +629,105 @@ def _trend_demo() -> None:
         print(f"   {tc:<6} {gold}{vals[-1]:>4}{off} {_trend_bar(vals, d)}")
 
 
+def _pct(w: int, l: int, d: int) -> float:
+    n = w + l + d
+    return (w + d / 2) / n * 100 if n else 0.0
+
+
+def _pct_bar(pct: float, width: int = 10, color: bool = True) -> str:
+    """█/░ win-rate bar, green when strong, red when weak."""
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    filled = max(0, min(width, round(pct / 100 * width)))
+    bar = "█" * filled + "░" * (width - filled)
+    return (c("32", bar) if pct >= 55 else c("31", bar) if pct <= 45
+            else bar)
+
+
+def _trends_block(parsed: list[dict], color: bool = True) -> str:
+    """The per-format trend bars + streak strip (banner and `stats`)."""
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    lines = []
+    for tc, ratings, delta in rating_trends(parsed)[:3]:
+        lines.append(f"   {tc:<6} {c('1;33', f'{ratings[-1]:>4}')} "
+                     f"{_trend_bar(ratings, delta, color=color)}")
+    streak = record(parsed)["streak"] if parsed else []
+    if streak:
+        marks = {"win": c("32", "█"), "loss": c("31", "█"),
+                 "draw": c("2", "█")}
+        lines.append(f"   {c('2', f'last {len(streak)}:')} "
+                     + "".join(marks[r] for r in streak)
+                     + f" {c('2', '(oldest → newest)')}")
+    return "\n".join(lines)
+
+
+def _record_panel(parsed: list[dict],
+                  color: bool | None = None) -> tuple[str, str]:
+    """W/L/D overall and sliced by color / time control. Returns
+    (panel, facts-for-narration)."""
+    if color is None:
+        color = sys.stdout.isatty()
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    rec = record(parsed)
+    rows = [("overall", rec["overall"]),
+            ("as White", rec["by_color"]["white"]),
+            ("as Black", rec["by_color"]["black"])]
+    rows += [(tc, wld) for tc, wld in rec["by_time_class"].items()]
+    lines, facts = [_rule(color)], []
+    for label, (w, l, d) in rows:
+        if not w + l + d:
+            continue
+        pct = _pct(w, l, d)
+        pct_s = (c("32", f"{pct:3.0f}%") if pct >= 55
+                 else c("31", f"{pct:3.0f}%") if pct <= 45
+                 else f"{pct:3.0f}%")
+        lines.append(f"   {label:<9} {w:>2}W/{l:>2}L/{d}D  "
+                     f"{_pct_bar(pct, color=color)} {pct_s}")
+        facts.append(f"{label}: {w}W/{l}L/{d}D ({pct:.0f}%)")
+    lines.append(_rule(color))
+    return "\n".join(lines), "; ".join(facts)
+
+
+def _endings_panel(parsed: list[dict],
+                   color: bool | None = None) -> tuple[str, str]:
+    """How games end (termination mix, timeout flag) + results vs
+    opponent strength. Returns (panel, facts-for-narration)."""
+    if color is None:
+        color = sys.stdout.isatty()
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    ends, buckets = endings(parsed), rating_buckets(parsed)
+    lines, facts = [_rule(color), f"   {c('2', 'how your games end')}"], []
+    for outcome, label in (("loss", "losses by"), ("win", "wins by")):
+        items = sorted(ends[outcome].items(), key=lambda kv: -kv[1])
+        total = sum(n for _, n in items)
+        if not total:
+            continue
+        parts = [f"{t} {n} ({n / total * 100:.0f}%)" for t, n in items]
+        lines.append(f"   {label:<10} " + f"{c('2', ' · ')}".join(parts))
+        facts.append(f"{label}: " + ", ".join(parts))
+    loss_total = sum(ends["loss"].values())
+    timeouts = ends["loss"].get("timeout", 0)
+    if loss_total and timeouts / loss_total >= 0.25:
+        lines.append(c("1;31", f"   ◀ {timeouts} of {loss_total} losses "
+                              "are on time — that's clock, not chess"))
+        facts.append(f"TIMEOUT FLAG: {timeouts}/{loss_total} losses on time")
+    lines.append(f"   {c('2', 'vs opponent strength (±100)')}")
+    for label in ("lower", "similar", "higher"):
+        w, l, d = buckets[label]
+        n = w + l + d
+        if not n:
+            continue
+        pct = _pct(w, l, d)
+        lines.append(f"   vs {label:<8} {_pct_bar(pct, color=color)} "
+                     f"{pct:3.0f}%  ({n} game{'s' if n != 1 else ''})")
+        facts.append(f"vs {label}-rated: {pct:.0f}% over {n}")
+    lines.append(_rule(color))
+    return "\n".join(lines), "; ".join(facts)
+
+
 def _stats_line(stats: dict) -> str | None:
     """'blitz 100 · rapid 526 · 39W/53L/4D lifetime' from chess.com stats."""
     parts, w, l, d = [], 0, 0, 0
@@ -649,18 +776,9 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
           f"100% local, nothing leaves this machine{off}\n")
     who = f"{nick} ({user})" if nick and nick.lower() != user.lower() else user
     print(f"   Coaching {gold}{who}{off}")
-    trends = rating_trends(games or [])
-    if trends:
-        for tc, ratings, delta in trends[:3]:
-            # fixed columns: name(6) rating(4, gold) trend bar (█/░ only)
-            print(f"   {tc:<6} {gold}{ratings[-1]:>4}{off} "
-                  f"{_trend_bar(ratings, delta, color=tty)}")
-        marks = {"win": f"{green}█", "loss": f"{red}█", "draw": f"{dim}█"}
-        streak = record(games or [])["streak"]
-        if streak:
-            blocks = "".join(marks[r] for r in streak) + off
-            print(f"   {dim}last {len(streak)}:{off} {blocks} "
-                  f"{dim}(oldest → newest){off}")
+    block = _trends_block(games or [], color=tty)
+    if block:
+        print(block)
     else:  # no recent games fetched — fall back to profile snapshot
         line = _stats_line(stats or {})
         if line:
@@ -710,6 +828,19 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                 continue
             if question.lower() in ("exit", "quit", "q"):
                 return
+
+            # "stats" is unambiguous — trends + record, no model round-trip
+            if re.fullmatch(r"stats?", question, re.IGNORECASE):
+                parsed = tools._parsed_recent()
+                panel, facts = _record_panel(parsed)
+                trend = _trends_block(parsed, color=sys.stdout.isatty())
+                print(("\n" + trend + "\n" if trend else "\n") + panel + "\n")
+                messages += [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content":
+                        f"I showed {nick} their stats. {facts}"},
+                ]
+                continue
 
             # "openings" is unambiguous — draw the chart, no model round-trip
             if re.fullmatch(r"openings?", question, re.IGNORECASE):
