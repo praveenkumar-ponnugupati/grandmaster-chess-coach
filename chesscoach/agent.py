@@ -19,8 +19,13 @@ import urllib.request
 from datetime import date
 from pathlib import Path
 
+import chess
+import chess.engine
+
+from .board import render_board
 from .chat import MODEL, OLLAMA
-from .fetch import get_profile
+from .chesscom import (endings, get_profile, get_stats, opening_records,
+                       parse_games, rating_buckets, rating_trends, record)
 from .memory import Supermemory
 from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
                        remember_run, save_report)
@@ -50,6 +55,18 @@ weaknesses, blunders, openings.
 - scout_opponent: when {user} names an opponent they will face.
 - recall_memory: past sessions, stored games, earlier advice, progress over time.
 - remember_note: save advice or plans worth keeping for future sessions.
+- show_openings: draw a win-rate-by-opening bar chart. Call it for anything \
+about {user}'s openings, then narrate the standout — name the worst \
+opening and its numbers.
+- show_endings: draw how {user}'s games end (checkmate/resignation/timeout) \
+and their score vs lower/similar/higher-rated opponents. When {user} asks \
+how or why they are losing, call BOTH show_openings and show_endings, then \
+narrate the one insight that matters most.
+- show_position: draw a chess board in the terminal. MANDATORY: before \
+answering anything about one specific position or blunder, call \
+show_position with its FEN exactly as the report gives it (plus the \
+played and best moves), then narrate the idea. Never paste raw FEN \
+strings into an answer — the player sees boards, not FENs.
 Ground every claim in tool results — never invent games, moves or numbers; \
 cite move numbers and moves exactly as the reports state them. If the \
 reports can't answer something, say so honestly.
@@ -104,6 +121,48 @@ TOOLS = [
             "note": {"type": "string", "description": "the note to remember"},
         }, "required": ["note"]},
     }},
+    {"type": "function", "function": {
+        "name": "show_openings",
+        "description": "Draw a horizontal bar chart of the player's "
+                       "results by opening (win%, games, net score, worst "
+                       "flagged). Use when asked how/where they lose games "
+                       "or about their opening repertoire.",
+        "parameters": {"type": "object", "properties": {
+            "months": {"type": "integer",
+                       "description": "monthly archives to include (default 2)"},
+            "max_games": {"type": "integer",
+                          "description": "recent games to include (default 60)"},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "show_endings",
+        "description": "Draw how the player's games end (termination mix, "
+                       "timeout flag) plus their score vs lower/similar/"
+                       "higher-rated opponents. Use alongside show_openings "
+                       "for how/why-am-I-losing questions.",
+        "parameters": {"type": "object", "properties": {
+            "months": {"type": "integer",
+                       "description": "monthly archives to include (default 2)"},
+            "max_games": {"type": "integer",
+                          "description": "recent games to include (default 60)"},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "show_position",
+        "description": "Draw a chess position as a board in the terminal, "
+                       "with the played move marked red, the best move "
+                       "green, and an engine eval bar. Use when discussing "
+                       "any specific position from a report.",
+        "parameters": {"type": "object", "properties": {
+            "fen": {"type": "string",
+                    "description": "the position FEN, exactly as the report "
+                                   "states it"},
+            "played_san": {"type": "string",
+                           "description": "the move that was actually played"},
+            "best_san": {"type": "string",
+                         "description": "the better move that was missed"},
+        }, "required": ["fen"]},
+    }},
 ]
 
 
@@ -118,6 +177,22 @@ def _status(text: str) -> None:
 def _clear_status() -> None:
     if sys.stdout.isatty():
         print("\r\033[K", end="", flush=True)
+
+
+# A FEN in prose (the model was told not to, but small models slip)
+_FEN_RE = re.compile(
+    r"(?:[rnbqkpRNBQKP1-8]+/){7}[rnbqkpRNBQKP1-8]+ [wb] "
+    r"(?:K?Q?k?q?|-) (?:[a-h][36]|-) \d+ \d+")
+
+
+def _maybe_show_fen_board(reply: str, tools) -> None:
+    """Safety net: if an answer slipped a FEN into prose, draw it anyway."""
+    m = _FEN_RE.search(reply)
+    if m:
+        try:
+            tools.call("show_position", {"fen": m.group(0)})
+        except Exception:
+            pass
 
 
 # name → {param: declared type}, for scrubbing model-invented arguments
@@ -224,6 +299,59 @@ class CoachTools:
         self.memory.remember_note(self.user, note)
         return "Saved to long-term memory."
 
+    def _parsed_recent(self, months: int = 2, max_games: int = 60) -> list[dict]:
+        return parse_games(
+            rated_recent_games(self.user, int(months), int(max_games),
+                               self.data_dir), self.user)
+
+    def _tool_show_openings(self, months: int = 2, max_games: int = 60) -> str:
+        recs = opening_records(self._parsed_recent(months, max_games))
+        if not recs:
+            return "No opening data found in the recent games."
+        panel, facts = _openings_panel(recs)
+        _clear_status()
+        print("\n" + panel + "\n")
+        return (f"(chart displayed to the player) {facts}. Narrate the "
+                "standout numbers — especially the worst opening — in your "
+                "own coaching voice; do not repeat the whole table.")
+
+    def _tool_show_endings(self, months: int = 2, max_games: int = 60) -> str:
+        parsed = self._parsed_recent(months, max_games)
+        if not parsed:
+            return "No recent games found."
+        panel, facts = _endings_panel(parsed)
+        _clear_status()
+        print("\n" + panel + "\n")
+        return (f"(chart displayed to the player) {facts}. Narrate the one "
+                "insight that matters most in your own coaching voice.")
+
+    def _tool_show_position(self, fen: str, played_san: str | None = None,
+                            best_san: str | None = None) -> str:
+        try:
+            board = chess.Board(fen)
+        except ValueError:
+            return "Error: that is not a valid FEN — copy it exactly from the report."
+        cp = engine_best = None
+        try:  # a quick engine look gives the eval bar + a best move if missing
+            with chess.engine.SimpleEngine.popen_uci(self.engine_path) as eng:
+                info = eng.analyse(board, chess.engine.Limit(time=0.2))
+                cp = info["score"].white().score(mate_score=1500)
+                if info.get("pv"):
+                    engine_best = board.san(info["pv"][0])
+        except Exception:
+            pass
+        best = best_san or engine_best
+        _clear_status()
+        print("\n" + render_board(fen, best=best, played=played_san,
+                                  eval_cp=cp) + "\n")
+        turn = "White" if board.turn == chess.WHITE else "Black"
+        out = f"(board displayed to the player) {turn} to move"
+        if cp is not None:
+            out += f"; engine eval {cp / 100:+.1f} from White's side"
+        if best:
+            out += f"; best move here is {best}"
+        return out + ". Now narrate the key idea in it for the player."
+
 
 def _chat_stream(messages: list[dict], model: str, on_text) -> dict:
     """One streamed model response. Text pieces go to `on_text` as they
@@ -290,6 +418,7 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
                 _clear_status()
                 print("coach › (no answer — try rephrasing)", end="")
             print("\n")
+            _maybe_show_fen_board(reply, tools)
             messages.append({"role": "assistant", "content": reply})
             return reply
         if started:  # the model spoke before deciding to use a tool
@@ -309,6 +438,9 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
                 "scout_opponent": f"scouting {args.get('opponent', 'them')} …",
                 "recall_memory": "checking my memory …",
                 "remember_note": "noting that down …",
+                "show_position": "setting up the board …",
+                "show_openings": "charting your openings …",
+                "show_endings": "checking how your games end …",
             }.get(name, "working …"))
             messages.append({"role": "tool", "content": tools.call(name, args)})
     _clear_status()
@@ -407,8 +539,234 @@ BANNER = """\
 ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"""
 
 
+RULE_WIDTH = 58
+
+
+def _rule(color: bool = True) -> str:
+    """Dim divider separating a stat drop from the coach's words."""
+    line = "─" * RULE_WIDTH
+    return f"\033[2m{line}\033[0m" if color else line
+
+
+def _openings_panel(recs: dict, color: bool | None = None,
+                    top: int = 8) -> tuple[str, str]:
+    """(panel_text, narration_facts): horizontal win-rate bars, worst
+    flagged. Facts go back to the model so the coach narrates numbers
+    that actually match the chart."""
+    if color is None:
+        color = sys.stdout.isatty()
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    rows = sorted(recs.items(), key=lambda kv: -sum(kv[1]))[:top]
+    flagged = min((r for r in rows if sum(r[1]) >= 3),
+                  key=lambda kv: (kv[1][0] + kv[1][2] / 2) / sum(kv[1]),
+                  default=None)
+    name_w = min(30, max(len(n) for n, _ in rows))
+    lines = [_rule(color)]
+    facts = []
+    for name, (w, l, d) in rows:
+        n = w + l + d
+        pct = (w + d / 2) / n * 100
+        filled = round(pct / 100 * 16)
+        bar = "█" * filled + "░" * (16 - filled)
+        bar = c("32", bar) if pct >= 55 else c("31", bar) if pct <= 45 else bar
+        net = w - l
+        net_s = (c("32", f"+{net}") if net > 0
+                 else c("31", str(net)) if net < 0 else c("2", "±0"))
+        games_s = f"{n:>2} game" + ("s" if n != 1 else " ")
+        line = (f"   {name[:name_w]:<{name_w}} {bar} {pct:3.0f}%  "
+                f"{games_s}  {net_s}")
+        if flagged and name == flagged[0]:
+            line += c("1;31", "  ◀ fix this")
+        lines.append(line)
+        facts.append(f"{name}: {pct:.0f}% over {n} (W{w}/L{l}/D{d})")
+    lines.append(_rule(color))
+    worst = (f" WORST: {flagged[0]}" if flagged else "")
+    return "\n".join(lines), "; ".join(facts) + worst
+
+
+TREND_BAR_WIDTH = 12
+
+
+def _trend_bar(vals: list[int], delta: int | None = None,
+               width: int = TREND_BAR_WIDTH, color: bool = True) -> str:
+    """Horizontal trend bar using ONLY █ and ░ (single-height glyphs — the
+    same technique as the streak strip, so no vertical overlap is possible).
+    Fill = where the current rating sits within the recent window's range;
+    fill color = direction (green up / red down / dim flat); arrow + delta
+    appended (week delta when known, else the window move)."""
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    lo, hi = min(vals), max(vals)
+    pos = (vals[-1] - lo) / (hi - lo) if hi > lo else 0.5
+    filled = max(1, round(pos * width))
+    move = delta if delta is not None else vals[-1] - vals[0]
+    # explicit grays, not the dim attribute — dim ░ vanishes on dark themes
+    tone = "32" if move > 0 else "31" if move < 0 else "38;5;250"
+    bar = c(tone, "█" * filled) + c("38;5;240", "░" * (width - filled))
+    arrow = (c("32", f"↑{move}") if move > 0
+             else c("31", f"↓{-move}") if move < 0 else c("38;5;250", "→"))
+    return f"{bar} {arrow}"
+
+
+def _trend_demo() -> None:
+    """Standalone renderer test — run in YOUR terminal:
+    ./venv/bin/python -c "from chesscoach.agent import _trend_demo; _trend_demo()"
+    Only █ and ░ are used (the streak strip's glyphs). Three stacked lines
+    below must stay three cleanly separate lines."""
+    gold, off = "\033[1;33m", "\033[0m"
+    cases = [("rising", [400, 440, 480, 526], None),
+             ("falling", [526, 480, 440, 400], None),
+             ("flat", [400] * 10, None),
+             ("recovering", [526, 400, 450, 470], None),
+             ("week-delta", [480, 500, 526], 40)]
+    for name, vals, d in cases:
+        print(f"  {name:<11} {_trend_bar(vals, d)}   \033[2m{vals}{off}")
+    print()
+    print("header mock (three adjacent rows — must not touch):")
+    for tc, vals, d in (("daily", [400] * 10, None),
+                        ("rapid", [520, 480, 450, 400, 470, 526], 40),
+                        ("blitz", [180, 160, 100, 100, 100], -12)):
+        print(f"   {tc:<6} {gold}{vals[-1]:>4}{off} {_trend_bar(vals, d)}")
+
+
+def _pct(w: int, l: int, d: int) -> float:
+    n = w + l + d
+    return (w + d / 2) / n * 100 if n else 0.0
+
+
+def _pct_bar(pct: float, width: int = 10, color: bool = True) -> str:
+    """█/░ win-rate bar, green when strong, red when weak."""
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    filled = max(0, min(width, round(pct / 100 * width)))
+    tone = "32" if pct >= 55 else "31" if pct <= 45 else "38;5;250"
+    return c(tone, "█" * filled) + c("38;5;240", "░" * (width - filled))
+
+
+def _trends_block(parsed: list[dict], color: bool = True) -> str:
+    """The per-format trend bars + streak strip (banner and `stats`)."""
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    lines = []
+    for tc, ratings, delta in rating_trends(parsed)[:3]:
+        lines.append(f"   {tc:<6} {c('1;33', f'{ratings[-1]:>4}')} "
+                     f"{_trend_bar(ratings, delta, color=color)}")
+    streak = record(parsed)["streak"] if parsed else []
+    if streak:
+        marks = {"win": c("32", "█"), "loss": c("31", "█"),
+                 "draw": c("38;5;245", "█")}
+        lines.append(f"   {c('2', f'last {len(streak)}:')} "
+                     + "".join(marks[r] for r in streak)
+                     + f" {c('2', '(oldest → newest)')}")
+    return "\n".join(lines)
+
+
+def _record_panel(parsed: list[dict],
+                  color: bool | None = None) -> tuple[str, str]:
+    """W/L/D overall and sliced by color / time control. Returns
+    (panel, facts-for-narration)."""
+    if color is None:
+        color = sys.stdout.isatty()
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    rec = record(parsed)
+    rows = [("overall", rec["overall"]),
+            ("as White", rec["by_color"]["white"]),
+            ("as Black", rec["by_color"]["black"])]
+    rows += [(tc, wld) for tc, wld in rec["by_time_class"].items()]
+    lines, facts = [_rule(color)], []
+    for label, (w, l, d) in rows:
+        if not w + l + d:
+            continue
+        pct = _pct(w, l, d)
+        pct_s = (c("32", f"{pct:3.0f}%") if pct >= 55
+                 else c("31", f"{pct:3.0f}%") if pct <= 45
+                 else f"{pct:3.0f}%")
+        lines.append(f"   {label:<9} {w:>2}W/{l:>2}L/{d}D  "
+                     f"{_pct_bar(pct, color=color)} {pct_s}")
+        facts.append(f"{label}: {w}W/{l}L/{d}D ({pct:.0f}%)")
+    lines.append(_rule(color))
+    return "\n".join(lines), "; ".join(facts)
+
+
+def _endings_panel(parsed: list[dict],
+                   color: bool | None = None) -> tuple[str, str]:
+    """How games end (termination mix, timeout flag) + results vs
+    opponent strength. Returns (panel, facts-for-narration)."""
+    if color is None:
+        color = sys.stdout.isatty()
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    ends, buckets = endings(parsed), rating_buckets(parsed)
+    lines, facts = [_rule(color), f"   {c('2', 'how your games end')}"], []
+    for outcome, label in (("loss", "losses by"), ("win", "wins by")):
+        items = sorted(ends[outcome].items(), key=lambda kv: -kv[1])
+        total = sum(n for _, n in items)
+        if not total:
+            continue
+        parts = [f"{t} {n} ({n / total * 100:.0f}%)" for t, n in items]
+        lines.append(f"   {label:<10} " + f"{c('2', ' · ')}".join(parts))
+        facts.append(f"{label}: " + ", ".join(parts))
+    loss_total = sum(ends["loss"].values())
+    timeouts = ends["loss"].get("timeout", 0)
+    if loss_total and timeouts / loss_total >= 0.25:
+        lines.append(c("1;31", f"   ◀ {timeouts} of {loss_total} losses "
+                              "are on time — that's clock, not chess"))
+        facts.append(f"TIMEOUT FLAG: {timeouts}/{loss_total} losses on time")
+    lines.append(f"   {c('2', 'vs opponent strength (±100)')}")
+    for label in ("lower", "similar", "higher"):
+        w, l, d = buckets[label]
+        n = w + l + d
+        if not n:
+            continue
+        pct = _pct(w, l, d)
+        lines.append(f"   vs {label:<8} {_pct_bar(pct, color=color)} "
+                     f"{pct:3.0f}%  ({n} game{'s' if n != 1 else ''})")
+        facts.append(f"vs {label}-rated: {pct:.0f}% over {n}")
+    lines.append(_rule(color))
+    return "\n".join(lines), "; ".join(facts)
+
+
+def _stats_line(stats: dict) -> str | None:
+    """'blitz 100 · rapid 526 · 39W/53L/4D lifetime' from chess.com stats."""
+    parts, w, l, d = [], 0, 0, 0
+    for key, label in (("chess_blitz", "blitz"), ("chess_rapid", "rapid"),
+                       ("chess_bullet", "bullet")):
+        tc = stats.get(key) or {}
+        rating = (tc.get("last") or {}).get("rating")
+        if rating:
+            parts.append(f"{label} {rating}")
+        rec = tc.get("record") or {}
+        w += rec.get("win") or 0
+        l += rec.get("loss") or 0
+        d += rec.get("draw") or 0
+    if w + l + d:
+        parts.append(f"{w}W/{l}L/{d}D lifetime")
+    return " · ".join(parts) if parts else None
+
+
+def _watchlist(last_note: str | None) -> str | None:
+    """One phrase from the last session worth flashing at startup."""
+    if not last_note:
+        return None
+    for key, label in (("endgame", "endgame technique"),
+                       ("clock", "clock management"),
+                       ("time trouble", "clock management"),
+                       ("middlegame", "middlegame play"),
+                       ("opening", "opening prep"),
+                       ("blunder", "blunder-checking when winning"),
+                       ("tactic", "tactics")):
+        if key in last_note.lower():
+            return label
+    return None
+
+
 def _print_banner(user: str, engine_path: str, memory: Supermemory,
-                  model: str, nick: str | None = None) -> None:
+                  model: str, nick: str | None = None,
+                  stats: dict | None = None,
+                  watchlist: str | None = None,
+                  games: list[dict] | None = None) -> None:
     tty = sys.stdout.isatty()
     def c(code):
         return f"\033[{code}m" if tty else ""
@@ -416,21 +774,27 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
     print(f"\n{gold}{BANNER}{off}")
     print(f"{dim}        ♞  your grandmaster chess coach — "
           f"100% local, nothing leaves this machine{off}\n")
-    mem_host = memory.api.removesuffix("/v3").replace("http://", "").replace(
-        "https://", "")
-    # Engine and brain were health-checked before the loop started
-    rows = [
-        (True, "Engine", f"Stockfish · {engine_path}"),
-        (True, "Brain", f"{model} · Ollama (localhost:11434)"),
-        (memory.enabled, "Memory",
-         f"Supermemory · {mem_host} — long-term memory "
-         + ("ON" if memory.enabled else "OFF (run via ./coach to enable)")),
-    ]
-    for healthy, label, detail in rows:
-        mark = f"{green}✓{off}" if healthy else f"{red}✗{off}"
-        print(f"   {mark} {label:<7} {dim}{detail}{off}")
     who = f"{nick} ({user})" if nick and nick.lower() != user.lower() else user
-    print(f"\n   Coaching {gold}{who}{off} — ask anything:")
+    print(f"   Coaching {gold}{who}{off}")
+    block = _trends_block(games or [], color=tty)
+    if block:
+        print(block)
+    else:  # no recent games fetched — fall back to profile snapshot
+        line = _stats_line(stats or {})
+        if line:
+            print(f"   {line}")
+    if watchlist:
+        print(f"   ♞ coach's watchlist: {gold}{watchlist}{off}"
+              f"{dim} — from your last session{off}")
+    # Engine and brain were health-checked before the loop started; memory
+    # is the only component that can be down here — whisper when healthy,
+    # shout only when something is actually wrong
+    if memory.enabled:
+        print(f"\n{dim}   all local: Stockfish + {model} + Supermemory "
+              f"{off}{green}✓{off}")
+    else:
+        print(f"\n   {red}✗ Memory{off} {dim}Supermemory is OFF — memories "
+              f"won't be kept; run via ./coach to enable{off}")
     print(f'{dim}   "how am I losing games?" · "scout hikaru" · '
           f'"what did we work on last time?" · exit to quit{off}\n')
 
@@ -446,7 +810,13 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                    "(use it to keep continuity — refer back naturally):\n"
                    + last_note)
     messages = [{"role": "system", "content": system}]
-    _print_banner(user, engine_path, tools.memory, model, nick)
+    try:  # recent games power the header trends; never block startup on them
+        recent = parse_games(rated_recent_games(user, 2, 60, data_dir), user)
+    except Exception:
+        recent = []
+    _print_banner(user, engine_path, tools.memory, model, nick,
+                  stats=get_stats(user), watchlist=_watchlist(last_note),
+                  games=recent)
     try:
         while True:
             try:
@@ -458,6 +828,29 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                 continue
             if question.lower() in ("exit", "quit", "q"):
                 return
+
+            # "stats" is unambiguous — trends + record, no model round-trip
+            if re.fullmatch(r"stats?", question, re.IGNORECASE):
+                parsed = tools._parsed_recent()
+                panel, facts = _record_panel(parsed)
+                trend = _trends_block(parsed, color=sys.stdout.isatty())
+                print(("\n" + trend + "\n" if trend else "\n") + panel + "\n")
+                messages += [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content":
+                        f"I showed {nick} their stats. {facts}"},
+                ]
+                continue
+
+            # "openings" is unambiguous — draw the chart, no model round-trip
+            if re.fullmatch(r"openings?", question, re.IGNORECASE):
+                result = tools.call("show_openings", {})
+                messages += [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content":
+                        f"I showed {nick} the openings chart. {result}"},
+                ]
+                continue
 
             # "scout USERNAME" is unambiguous — run it directly, no model round-trip
             m = re.fullmatch(r"scout\s+([\w.-]+)", question, re.IGNORECASE)

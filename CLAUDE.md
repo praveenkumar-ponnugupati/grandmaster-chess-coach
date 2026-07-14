@@ -70,8 +70,15 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 
 ## Architecture (one line each)
 
-- `fetch.py` — chess.com public API (UA header required); monthly archives
-  cached in `data/archives/`, completed months immutable, current month always refetched.
+- `chesscom.py` — the chess.com DATA LAYER (replaced fetch.py 2026-07-14):
+  all public-API access (UA header required), month-cached archives
+  (completed months immutable, current month refetched),
+  `parse_game`/`parse_games` (result/color/opponent+rating/time
+  control/ECO+opening/termination/my-rating; PGN kept for the engine
+  pass), and engine-free derived stats: `rating_trends`, `record`,
+  `opening_records` ("Opening (Color)" keys), `rating_buckets` (±100),
+  `endings` (termination mix — the timeout insight lives here).
+  "What happened" = this module; "why" = Stockfish in analyze.py, on top.
 - `analyze.py` — Stockfish evals of the user's moves only; cp-loss classes
   50/100/250; mate folded to ±1500; cached per game uuid in `data/analysis/`.
   KNOWN LIMITATION: `--movetime` is not part of the cache key.
@@ -94,12 +101,30 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 - `pipeline.py` — the shared fetch → analyze → report core; both the CLI
   path and the agent's tools sit on it (`rated_recent_games`,
   `analyze_and_report`, `remember_run`, `save_report`).
+- `board.py` — inline ANSI chess board (Unicode pieces, gray squares,
+  green best-move / red played-move highlights, logistic eval bar);
+  plain-text fallback when stdout isn't a tty. Raw ANSI on purpose — the
+  Rich/Textual route was rejected to keep the stdlib-only rule and the
+  linear texting-a-mentor REPL (design decision 2026-07-13). Agent tool
+  `show_position` (5th tool) draws it + runs a 0.2 s engine eval; a
+  `_FEN_RE` safety net in run_turn auto-draws any FEN a reply pastes
+  into prose (small models ignore the MANDATORY prompt sometimes).
 - `agent.py` — `./coach agent`: conversational agentic REPL. Ollama
   tool-calling (qwen2.5:7b — switched from llama3.1:8b 2026-07-13, streamed NDJSON — answer text prints live via
   `_chat_stream`/`on_text`, paced to STREAM_CHARS_PER_SEC=140 on ttys for
   a calm typewriter feel (piped output unpaced), tool calls collected
-  mid-stream; `num_ctx` 16384) over four tools: analyze_my_games / scout_opponent /
-  recall_memory / remember_note. Tool execution is invisible by owner's
+  mid-stream; `num_ctx` 16384) over six tools: analyze_my_games /
+  scout_opponent / recall_memory / remember_note / show_position /
+  show_openings. show_openings renders `_openings_panel` (win% bars
+  from PGN ECOUrl headers, worst flagged "◀ fix this", dim `_rule`
+  dividers) and returns a facts string so the coach narrates numbers
+  matching the chart; show_endings (7th tool) renders `_endings_panel`
+  (termination mix + red timeout flag + rating buckets) — "how am I
+  losing" prompts call openings+endings; `stats` input is a fast path
+  (trends block + `_record_panel` W/L/D by color/time class), bare
+  `openings` likewise. Real data insight found 2026-07-14: 59% of the
+  owner's losses are timeouts; 0W/10L as White. PGNs carry `%clk` —
+  engine clock analysis is feasible later. Tool execution is invisible by owner's
   request (2026-07-13): no ⚙/progress/saved lines — a dim transient
   status ("♞ analyzing your games … 3/10", `_status`/`_clear_status`,
   tty-only, self-erasing) is the only sign of work; responses are the
@@ -120,8 +145,16 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
   `scout USERNAME` input bypasses the model entirely (deterministic
   fast path). Agent analyses default to 10 games for snappy turns and
   are auto-remembered in Supermemory. Startup shows the GRANDMASTER
-  banner (BANNER + _print_banner: gold art, per-component stack status;
-  ANSI colors only when stdout is a tty).
+  banner (BANNER + _print_banner, ANSI colors only when stdout is a tty):
+  player-facing stats up top — per-time-class rating sparklines over
+  the last ≤15 games with ↑/↓ week delta (`_rating_trends`/`_spark`,
+  from cached archives fetched quietly at startup) + a green/red/dim
+  W-L-D streak strip (`_streak`) + a "coach's watchlist" phrase
+  keyword-matched from the last session note (`_watchlist`, no model
+  call); falls back to `_stats_line` (stats API snapshot) when no games.
+  Stack status collapsed to one dim "all local … ✓" line that expands
+  to a red ✗ only when memory is OFF (owner's call 2026-07-13: user
+  stats beat component status).
 
 ## Current state / next steps
 

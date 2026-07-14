@@ -9,6 +9,8 @@ import chess
 import chess.engine
 import chess.pgn
 
+from .chesscom import _opening_name
+
 # Centipawn-loss classification (chess.com/lichess-style buckets)
 BLUNDER, MISTAKE, INACCURACY = 250, 100, 50
 # Mates fold into a large-but-finite cp value so swings stay comparable
@@ -105,15 +107,3 @@ def _user_result(game_json: dict, user_is_white: bool) -> str:
     return "loss"
 
 
-def _opening_name(eco_url: str) -> str:
-    # https://www.chess.com/openings/Sicilian-Defense-Open-2...Nc6 → readable name
-    if "/openings/" not in eco_url:
-        return "Unknown"
-    slug = eco_url.rsplit("/", 1)[-1]
-    # Drop trailing move-list suffixes like "-2...Nc6-3.d4" for grouping
-    words = []
-    for part in slug.split("-"):
-        if part and (part[0].isdigit() or "." in part):
-            break
-        words.append(part)
-    return " ".join(words) or "Unknown"
