@@ -106,8 +106,14 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
   tool-calling (qwen2.5:7b — switched from llama3.1:8b 2026-07-13, streamed NDJSON — answer text prints live via
   `_chat_stream`/`on_text`, paced to STREAM_CHARS_PER_SEC=140 on ttys for
   a calm typewriter feel (piped output unpaced), tool calls collected
-  mid-stream; `num_ctx` 16384) over four tools: analyze_my_games / scout_opponent /
-  recall_memory / remember_note. Tool execution is invisible by owner's
+  mid-stream; `num_ctx` 16384) over six tools: analyze_my_games /
+  scout_opponent / recall_memory / remember_note / show_position /
+  show_openings. show_openings renders `_openings_panel` (win% bars
+  from PGN ECOUrl headers, worst flagged "◀ fix this", dim `_rule`
+  dividers) and returns a facts string so the coach narrates numbers
+  matching the chart; bare `openings` input is a deterministic fast
+  path like `scout`. PGNs carry `%clk` — clock analysis is feasible
+  (verified 2026-07-14). Tool execution is invisible by owner's
   request (2026-07-13): no ⚙/progress/saved lines — a dim transient
   status ("♞ analyzing your games … 3/10", `_status`/`_clear_status`,
   tty-only, self-erasing) is the only sign of work; responses are the

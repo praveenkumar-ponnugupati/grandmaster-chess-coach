@@ -22,7 +22,8 @@ from pathlib import Path
 import chess
 import chess.engine
 
-from .analyze import _user_result as _game_result  # same-package helper
+from .analyze import _opening_name
+from .analyze import _user_result as _game_result  # same-package helpers
 from .board import render_board
 from .chat import MODEL, OLLAMA
 from .fetch import get_profile, get_stats
@@ -55,6 +56,9 @@ weaknesses, blunders, openings.
 - scout_opponent: when {user} names an opponent they will face.
 - recall_memory: past sessions, stored games, earlier advice, progress over time.
 - remember_note: save advice or plans worth keeping for future sessions.
+- show_openings: draw a win-rate-by-opening bar chart. Call it when {user} \
+asks how/where they are losing games or anything about their openings, \
+then narrate the standout — name the worst opening and its numbers.
 - show_position: draw a chess board in the terminal. MANDATORY: before \
 answering anything about one specific position or blunder, call \
 show_position with its FEN exactly as the report gives it (plus the \
@@ -113,6 +117,19 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {
             "note": {"type": "string", "description": "the note to remember"},
         }, "required": ["note"]},
+    }},
+    {"type": "function", "function": {
+        "name": "show_openings",
+        "description": "Draw a horizontal bar chart of the player's "
+                       "results by opening (win%, games, net score, worst "
+                       "flagged). Use when asked how/where they lose games "
+                       "or about their opening repertoire.",
+        "parameters": {"type": "object", "properties": {
+            "months": {"type": "integer",
+                       "description": "monthly archives to include (default 2)"},
+            "max_games": {"type": "integer",
+                          "description": "recent games to include (default 60)"},
+        }, "required": []},
     }},
     {"type": "function", "function": {
         "name": "show_position",
@@ -266,6 +283,19 @@ class CoachTools:
         self.memory.remember_note(self.user, note)
         return "Saved to long-term memory."
 
+    def _tool_show_openings(self, months: int = 2, max_games: int = 60) -> str:
+        games = rated_recent_games(self.user, int(months), int(max_games),
+                                   self.data_dir)
+        recs = _opening_records(self.user, games)
+        if not recs:
+            return "No opening data found in the recent games."
+        panel, facts = _openings_panel(recs)
+        _clear_status()
+        print("\n" + panel + "\n")
+        return (f"(chart displayed to the player) {facts}. Narrate the "
+                "standout numbers — especially the worst opening — in your "
+                "own coaching voice; do not repeat the whole table.")
+
     def _tool_show_position(self, fen: str, played_san: str | None = None,
                             best_san: str | None = None) -> str:
         try:
@@ -380,6 +410,7 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
                 "recall_memory": "checking my memory …",
                 "remember_note": "noting that down …",
                 "show_position": "setting up the board …",
+                "show_openings": "charting your openings …",
             }.get(name, "working …"))
             messages.append({"role": "tool", "content": tools.call(name, args)})
     _clear_status()
@@ -480,6 +511,68 @@ BANNER = """\
 
 SPARK_CHARS = "▁▂▃▄▅▆▇█"
 WEEK_SECONDS = 7 * 86400
+RULE_WIDTH = 58
+_ECOURL_RE = re.compile(r'\[ECOUrl "([^"]+)"\]')
+
+
+def _rule(color: bool = True) -> str:
+    """Dim divider separating a stat drop from the coach's words."""
+    line = "─" * RULE_WIDTH
+    return f"\033[2m{line}\033[0m" if color else line
+
+
+def _opening_records(user: str, games: list[dict]) -> dict:
+    """opening name → (wins, losses, draws), from PGN ECOUrl headers."""
+    recs: dict[str, tuple[int, int, int]] = {}
+    for g in games:
+        m = _ECOURL_RE.search(g.get("pgn") or "")
+        name = _opening_name(m.group(1)) if m else "Unknown"
+        if name in ("Unknown", "Undefined"):
+            continue
+        is_white = (g.get("white") or {}).get(
+            "username", "").lower() == user.lower()
+        res = _game_result(g, is_white)
+        w, l, d = recs.get(name, (0, 0, 0))
+        recs[name] = (w + (res == "win"), l + (res == "loss"),
+                      d + (res == "draw"))
+    return recs
+
+
+def _openings_panel(recs: dict, color: bool | None = None,
+                    top: int = 8) -> tuple[str, str]:
+    """(panel_text, narration_facts): horizontal win-rate bars, worst
+    flagged. Facts go back to the model so the coach narrates numbers
+    that actually match the chart."""
+    if color is None:
+        color = sys.stdout.isatty()
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    rows = sorted(recs.items(), key=lambda kv: -sum(kv[1]))[:top]
+    flagged = min((r for r in rows if sum(r[1]) >= 3),
+                  key=lambda kv: (kv[1][0] + kv[1][2] / 2) / sum(kv[1]),
+                  default=None)
+    name_w = min(30, max(len(n) for n, _ in rows))
+    lines = [_rule(color)]
+    facts = []
+    for name, (w, l, d) in rows:
+        n = w + l + d
+        pct = (w + d / 2) / n * 100
+        filled = round(pct / 100 * 16)
+        bar = "█" * filled + "░" * (16 - filled)
+        bar = c("32", bar) if pct >= 55 else c("31", bar) if pct <= 45 else bar
+        net = w - l
+        net_s = (c("32", f"+{net}") if net > 0
+                 else c("31", str(net)) if net < 0 else c("2", "±0"))
+        games_s = f"{n:>2} game" + ("s" if n != 1 else " ")
+        line = (f"   {name[:name_w]:<{name_w}} {bar} {pct:3.0f}%  "
+                f"{games_s}  {net_s}")
+        if flagged and name == flagged[0]:
+            line += c("1;31", "  ◀ fix this")
+        lines.append(line)
+        facts.append(f"{name}: {pct:.0f}% over {n} (W{w}/L{l}/D{d})")
+    lines.append(_rule(color))
+    worst = (f" WORST: {flagged[0]}" if flagged else "")
+    return "\n".join(lines), "; ".join(facts) + worst
 
 
 def _spark(vals: list[int]) -> str:
@@ -641,6 +734,16 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                 continue
             if question.lower() in ("exit", "quit", "q"):
                 return
+
+            # "openings" is unambiguous — draw the chart, no model round-trip
+            if re.fullmatch(r"openings?", question, re.IGNORECASE):
+                result = tools.call("show_openings", {})
+                messages += [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content":
+                        f"I showed {nick} the openings chart. {result}"},
+                ]
+                continue
 
             # "scout USERNAME" is unambiguous — run it directly, no model round-trip
             m = re.fullmatch(r"scout\s+([\w.-]+)", question, re.IGNORECASE)
