@@ -509,7 +509,6 @@ BANNER = """\
 ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"""
 
 
-SPARK_CHARS = "▁▂▃▄▅▆▇█"
 WEEK_SECONDS = 7 * 86400
 RULE_WIDTH = 58
 _ECOURL_RE = re.compile(r'\[ECOUrl "([^"]+)"\]')
@@ -575,37 +574,48 @@ def _openings_panel(recs: dict, color: bool | None = None,
     return "\n".join(lines), "; ".join(facts) + worst
 
 
-def _spark(vals: list[int]) -> str:
-    """Values mapped onto ▁▂▃▄▅▆▇█ (min–max scaled). A flat series stays a
-    thin baseline — a row of mid-blocks reads as a solid slab, not a trend."""
+TREND_BAR_WIDTH = 12
+
+
+def _trend_bar(vals: list[int], delta: int | None = None,
+               width: int = TREND_BAR_WIDTH, color: bool = True) -> str:
+    """Horizontal trend bar using ONLY █ and ░ (single-height glyphs — the
+    same technique as the streak strip, so no vertical overlap is possible).
+    Fill = where the current rating sits within the recent window's range;
+    fill color = direction (green up / red down / dim flat); arrow + delta
+    appended (week delta when known, else the window move)."""
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
     lo, hi = min(vals), max(vals)
-    if hi == lo:
-        return "▂" * len(vals)
-    return "".join(SPARK_CHARS[round((v - lo) / (hi - lo) * 7)] for v in vals)
+    pos = (vals[-1] - lo) / (hi - lo) if hi > lo else 0.5
+    filled = max(1, round(pos * width))
+    move = delta if delta is not None else vals[-1] - vals[0]
+    tone = "32" if move > 0 else "31" if move < 0 else "2"
+    bar = c(tone, "█" * filled) + c("2", "░" * (width - filled))
+    arrow = (c("32", f"↑{move}") if move > 0
+             else c("31", f"↓{-move}") if move < 0 else c("2", "→"))
+    return f"{bar} {arrow}"
 
 
-def _spark_demo() -> None:
-    """Glyph/alignment test — run in YOUR terminal to check the font:
-    ./venv/bin/python -c "from chesscoach.agent import _spark_demo; _spark_demo()"
-    Every block below must be uniform width on one shared baseline."""
-    dim, gold, off = "\033[2m", "\033[1;33m", "\033[0m"
-    print(f"8-level ramp:  {''.join(SPARK_CHARS)}   "
-          f"(spaced: {' '.join(SPARK_CHARS)})")
-    print(f"4-level ramp:  ▁▃▅▇   (fallback if the 8-level looks ragged)")
+def _trend_demo() -> None:
+    """Standalone renderer test — run in YOUR terminal:
+    ./venv/bin/python -c "from chesscoach.agent import _trend_demo; _trend_demo()"
+    Only █ and ░ are used (the streak strip's glyphs). Three stacked lines
+    below must stay three cleanly separate lines."""
+    gold, off = "\033[1;33m", "\033[0m"
+    cases = [("rising", [400, 440, 480, 526], None),
+             ("falling", [526, 480, 440, 400], None),
+             ("flat", [400] * 10, None),
+             ("recovering", [526, 400, 450, 470], None),
+             ("week-delta", [480, 500, 526], 40)]
+    for name, vals, d in cases:
+        print(f"  {name:<11} {_trend_bar(vals, d)}   \033[2m{vals}{off}")
     print()
-    cases = [("rising", [1, 2, 3, 4, 5, 6, 7, 8]),
-             ("falling", [8, 7, 6, 5, 4, 3, 2, 1]),
-             ("flat", [400] * 10),
-             ("noisy", [520, 480, 526, 450, 500, 470, 510]),
-             ("two-vals", [100, 200])]
-    for name, vals in cases:
-        print(f"  {name:<9} {_spark(vals)}   {dim}{vals}{off}")
-    print()
-    print("header mock (fixed columns, dim sparks):")
-    for tc, r, vals in (("daily", 400, [400] * 10),
-                        ("rapid", 526, [520, 480, 450, 400, 470, 526]),
-                        ("blitz", 100, [180, 160, 100, 100, 100])):
-        print(f"   {tc:<6} {gold}{r:>4}{off} {dim}{_spark(vals)}{off}")
+    print("header mock (three adjacent rows — must not touch):")
+    for tc, vals, d in (("daily", [400] * 10, None),
+                        ("rapid", [520, 480, 450, 400, 470, 526], 40),
+                        ("blitz", [180, 160, 100, 100, 100], -12)):
+        print(f"   {tc:<6} {gold}{vals[-1]:>4}{off} {_trend_bar(vals, d)}")
 
 
 def _my_side(game: dict, user: str) -> dict:
@@ -698,14 +708,9 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
     trends = _rating_trends(user, games or [])
     if trends:
         for tc, ratings, delta in trends[:3]:
-            # fixed columns: name(6) rating(4, gold) spark(dim) delta
-            line = (f"{tc:<6} {gold}{ratings[-1]:>4}{off} "
-                    f"{dim}{_spark(ratings)}{off}")
-            if delta:
-                arrow = (f"{green}↑{delta}" if delta > 0
-                         else f"{red}↓{-delta}")
-                line += f" {arrow}{off}{dim} this week{off}"
-            print(f"   {line}")
+            # fixed columns: name(6) rating(4, gold) trend bar (█/░ only)
+            print(f"   {tc:<6} {gold}{ratings[-1]:>4}{off} "
+                  f"{_trend_bar(ratings, delta, color=tty)}")
         marks = {"win": f"{green}█", "loss": f"{red}█", "draw": f"{dim}█"}
         streak = _streak(user, games or [])
         if streak:
