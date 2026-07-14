@@ -601,10 +601,11 @@ def _trend_bar(vals: list[int], delta: int | None = None,
     pos = (vals[-1] - lo) / (hi - lo) if hi > lo else 0.5
     filled = max(1, round(pos * width))
     move = delta if delta is not None else vals[-1] - vals[0]
-    tone = "32" if move > 0 else "31" if move < 0 else "2"
-    bar = c(tone, "█" * filled) + c("2", "░" * (width - filled))
+    # explicit grays, not the dim attribute — dim ░ vanishes on dark themes
+    tone = "32" if move > 0 else "31" if move < 0 else "38;5;250"
+    bar = c(tone, "█" * filled) + c("38;5;240", "░" * (width - filled))
     arrow = (c("32", f"↑{move}") if move > 0
-             else c("31", f"↓{-move}") if move < 0 else c("2", "→"))
+             else c("31", f"↓{-move}") if move < 0 else c("38;5;250", "→"))
     return f"{bar} {arrow}"
 
 
@@ -639,9 +640,8 @@ def _pct_bar(pct: float, width: int = 10, color: bool = True) -> str:
     def c(code, s):
         return f"\033[{code}m{s}\033[0m" if color else s
     filled = max(0, min(width, round(pct / 100 * width)))
-    bar = "█" * filled + "░" * (width - filled)
-    return (c("32", bar) if pct >= 55 else c("31", bar) if pct <= 45
-            else bar)
+    tone = "32" if pct >= 55 else "31" if pct <= 45 else "38;5;250"
+    return c(tone, "█" * filled) + c("38;5;240", "░" * (width - filled))
 
 
 def _trends_block(parsed: list[dict], color: bool = True) -> str:
@@ -655,7 +655,7 @@ def _trends_block(parsed: list[dict], color: bool = True) -> str:
     streak = record(parsed)["streak"] if parsed else []
     if streak:
         marks = {"win": c("32", "█"), "loss": c("31", "█"),
-                 "draw": c("2", "█")}
+                 "draw": c("38;5;245", "█")}
         lines.append(f"   {c('2', f'last {len(streak)}:')} "
                      + "".join(marks[r] for r in streak)
                      + f" {c('2', '(oldest → newest)')}")
