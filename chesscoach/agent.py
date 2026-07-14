@@ -22,11 +22,10 @@ from pathlib import Path
 import chess
 import chess.engine
 
-from .analyze import _opening_name
-from .analyze import _user_result as _game_result  # same-package helpers
 from .board import render_board
 from .chat import MODEL, OLLAMA
-from .fetch import get_profile, get_stats
+from .chesscom import (endings, get_profile, get_stats, opening_records,
+                       parse_games, rating_buckets, rating_trends, record)
 from .memory import Supermemory
 from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
                        remember_run, save_report)
@@ -283,10 +282,13 @@ class CoachTools:
         self.memory.remember_note(self.user, note)
         return "Saved to long-term memory."
 
+    def _parsed_recent(self, months: int = 2, max_games: int = 60) -> list[dict]:
+        return parse_games(
+            rated_recent_games(self.user, int(months), int(max_games),
+                               self.data_dir), self.user)
+
     def _tool_show_openings(self, months: int = 2, max_games: int = 60) -> str:
-        games = rated_recent_games(self.user, int(months), int(max_games),
-                                   self.data_dir)
-        recs = _opening_records(self.user, games)
+        recs = opening_records(self._parsed_recent(months, max_games))
         if not recs:
             return "No opening data found in the recent games."
         panel, facts = _openings_panel(recs)
@@ -509,32 +511,13 @@ BANNER = """\
 ╚═╝     ╚═╝╚═╝  ╚═╝╚══════╝   ╚═╝   ╚══════╝╚═╝  ╚═╝"""
 
 
-WEEK_SECONDS = 7 * 86400
 RULE_WIDTH = 58
-_ECOURL_RE = re.compile(r'\[ECOUrl "([^"]+)"\]')
 
 
 def _rule(color: bool = True) -> str:
     """Dim divider separating a stat drop from the coach's words."""
     line = "─" * RULE_WIDTH
     return f"\033[2m{line}\033[0m" if color else line
-
-
-def _opening_records(user: str, games: list[dict]) -> dict:
-    """opening name → (wins, losses, draws), from PGN ECOUrl headers."""
-    recs: dict[str, tuple[int, int, int]] = {}
-    for g in games:
-        m = _ECOURL_RE.search(g.get("pgn") or "")
-        name = _opening_name(m.group(1)) if m else "Unknown"
-        if name in ("Unknown", "Undefined"):
-            continue
-        is_white = (g.get("white") or {}).get(
-            "username", "").lower() == user.lower()
-        res = _game_result(g, is_white)
-        w, l, d = recs.get(name, (0, 0, 0))
-        recs[name] = (w + (res == "win"), l + (res == "loss"),
-                      d + (res == "draw"))
-    return recs
 
 
 def _openings_panel(recs: dict, color: bool | None = None,
@@ -618,45 +601,6 @@ def _trend_demo() -> None:
         print(f"   {tc:<6} {gold}{vals[-1]:>4}{off} {_trend_bar(vals, d)}")
 
 
-def _my_side(game: dict, user: str) -> dict:
-    white = game.get("white") or {}
-    if white.get("username", "").lower() == user.lower():
-        return white
-    return game.get("black") or {}
-
-
-def _rating_trends(user: str, games: list[dict]
-                   ) -> list[tuple[str, list[int], int | None]]:
-    """Per time class (most-played first): chronological ratings for the
-    last ≤15 games and the rating change vs one week ago (None if the
-    window has no game that old). `games` arrive newest-first."""
-    per: dict[str, list[tuple[int, int]]] = {}
-    for g in games:
-        rating = _my_side(g, user).get("rating")
-        if not rating:
-            continue
-        per.setdefault(g.get("time_class", "?"), []).append(
-            (g.get("end_time", 0), rating))
-    out = []
-    for tc, entries in sorted(per.items(), key=lambda kv: -len(kv[1])):
-        latest_t, latest_r = entries[0]
-        delta = next((latest_r - r for t, r in entries
-                      if t <= latest_t - WEEK_SECONDS), None)
-        ratings = [r for _, r in reversed(entries[:15])]
-        out.append((tc, ratings, delta))
-    return out
-
-
-def _streak(user: str, games: list[dict], n: int = 12) -> list[str]:
-    """win/draw/loss of the last n games, oldest → newest."""
-    results = []
-    for g in reversed(games[:n]):
-        is_white = (g.get("white") or {}).get(
-            "username", "").lower() == user.lower()
-        results.append(_game_result(g, is_white))
-    return results
-
-
 def _stats_line(stats: dict) -> str | None:
     """'blitz 100 · rapid 526 · 39W/53L/4D lifetime' from chess.com stats."""
     parts, w, l, d = [], 0, 0, 0
@@ -705,14 +649,14 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
           f"100% local, nothing leaves this machine{off}\n")
     who = f"{nick} ({user})" if nick and nick.lower() != user.lower() else user
     print(f"   Coaching {gold}{who}{off}")
-    trends = _rating_trends(user, games or [])
+    trends = rating_trends(games or [])
     if trends:
         for tc, ratings, delta in trends[:3]:
             # fixed columns: name(6) rating(4, gold) trend bar (█/░ only)
             print(f"   {tc:<6} {gold}{ratings[-1]:>4}{off} "
                   f"{_trend_bar(ratings, delta, color=tty)}")
         marks = {"win": f"{green}█", "loss": f"{red}█", "draw": f"{dim}█"}
-        streak = _streak(user, games or [])
+        streak = record(games or [])["streak"]
         if streak:
             blocks = "".join(marks[r] for r in streak) + off
             print(f"   {dim}last {len(streak)}:{off} {blocks} "
@@ -749,7 +693,7 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                    + last_note)
     messages = [{"role": "system", "content": system}]
     try:  # recent games power the header trends; never block startup on them
-        recent = rated_recent_games(user, 2, 60, data_dir)
+        recent = parse_games(rated_recent_games(user, 2, 60, data_dir), user)
     except Exception:
         recent = []
     _print_banner(user, engine_path, tools.memory, model, nick,

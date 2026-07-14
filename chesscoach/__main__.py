@@ -14,7 +14,7 @@ import sys
 import urllib.error
 from pathlib import Path
 
-from .fetch import player_exists
+from .chesscom import player_exists
 from .memory import Supermemory
 from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
                        remember_run, save_report)

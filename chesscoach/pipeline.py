@@ -12,7 +12,7 @@ from typing import Callable
 import chess.engine
 
 from .analyze import analyze_game
-from .fetch import fetch_games
+from .chesscom import fetch_games
 from .memory import Supermemory
 from .report import build_report, coach_note_texts
 from .scout import build_scout_report, scout_note_texts
