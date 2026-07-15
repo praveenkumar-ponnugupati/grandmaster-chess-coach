@@ -27,6 +27,8 @@ from .chat import MODEL, OLLAMA
 from .chesscom import (endings, get_profile, get_stats, opening_records,
                        parse_games, rating_buckets, rating_trends, record)
 from .memory import Supermemory
+from .metrics import (blunder_trend, clock_report, cpl_trend, phase_acpl,
+                      split_halves)
 from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
                        remember_run, save_report)
 
@@ -62,6 +64,11 @@ opening and its numbers.
 and their score vs lower/similar/higher-rated opponents. When {user} asks \
 how or why they are losing, call BOTH show_openings and show_endings, then \
 narrate the one insight that matters most.
+- show_trends: engine-verified metrics — accuracy (centipawn loss) trend, \
+blunders per game trend, which phase the eval collapses in, and clock \
+truth (timeout losses in fine positions vs outplayed; blunders under \
+30s). Call for questions about accuracy, improvement, progress, blunder \
+habits or time trouble.
 - show_position: draw a chess board in the terminal. MANDATORY: before \
 answering anything about one specific position or blunder, call \
 show_position with its FEN exactly as the report gives it (plus the \
@@ -145,6 +152,20 @@ TOOLS = [
                        "description": "monthly archives to include (default 2)"},
             "max_games": {"type": "integer",
                           "description": "recent games to include (default 60)"},
+        }, "required": []},
+    }},
+    {"type": "function", "function": {
+        "name": "show_trends",
+        "description": "Draw engine-verified coaching metrics: accuracy "
+                       "(CPL) trend, blunders-per-game trend, phase "
+                       "collapse breakdown, and clock analysis (timeout "
+                       "losses in fine positions, blunders under 30s). "
+                       "Use for accuracy/progress/blunder/time questions.",
+        "parameters": {"type": "object", "properties": {
+            "months": {"type": "integer",
+                       "description": "monthly archives to include (default 2)"},
+            "max_games": {"type": "integer",
+                          "description": "recent games to analyze (default 15)"},
         }, "required": []},
     }},
     {"type": "function", "function": {
@@ -325,6 +346,25 @@ class CoachTools:
         return (f"(chart displayed to the player) {facts}. Narrate the one "
                 "insight that matters most in your own coaching voice.")
 
+    def _tool_show_trends(self, months: int = 2, max_games: int = 15) -> str:
+        raw = rated_recent_games(self.user, int(months), int(max_games),
+                                 self.data_dir)
+        parsed = parse_games(raw, self.user)
+        _status(f"engine-checking {len(raw)} games …")
+        _, analyzed, _ = analyze_and_report(
+            self.user, raw, engine_path=self.engine_path,
+            movetime=self.movetime, data_dir=self.data_dir,
+            memory=self.memory, scouting=False,
+            progress=lambda i, n: _status(f"engine-checking games … {i}/{n}"))
+        if not analyzed:
+            return "No analyzable games found."
+        panel, facts = _metrics_panel(analyzed, parsed)
+        _clear_status()
+        print("\n" + panel + "\n")
+        remember_run(self.memory, self.user, analyzed, scouting=False)
+        return (f"(metrics displayed to the player) {facts}. Narrate the "
+                "single most important insight in your coaching voice.")
+
     def _tool_show_position(self, fen: str, played_san: str | None = None,
                             best_san: str | None = None) -> str:
         try:
@@ -441,6 +481,7 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
                 "show_position": "setting up the board …",
                 "show_openings": "charting your openings …",
                 "show_endings": "checking how your games end …",
+                "show_trends": "running the engine over your games …",
             }.get(name, "working …"))
             messages.append({"role": "tool", "content": tools.call(name, args)})
     _clear_status()
@@ -728,6 +769,78 @@ def _endings_panel(parsed: list[dict],
     return "\n".join(lines), "; ".join(facts)
 
 
+def _metrics_panel(analyzed: list[dict], parsed: list[dict],
+                   color: bool | None = None) -> tuple[str, str]:
+    """Engine metrics: accuracy trend, blunders/game trend, phase
+    collapse, clock truths. Returns (panel, facts-for-narration)."""
+    if color is None:
+        color = sys.stdout.isatty()
+    def c(code, s):
+        return f"\033[{code}m{s}\033[0m" if color else s
+    def better_worse(old, new, invert=True):
+        """Lower is better for CPL/blunders (invert=True)."""
+        d = new - old
+        good = d < 0 if invert else d > 0
+        if abs(d) < 0.05 * max(abs(old), 1):
+            return c("38;5;250", "→ steady")
+        word = "improving" if good else "worsening"
+        arrow = "↓" if d < 0 else "↑"
+        return c("32" if good else "31", f"{arrow} {word}")
+    lines, facts = [_rule(color)], []
+
+    halves = split_halves(cpl_trend(analyzed))
+    if halves:
+        old, new = halves
+        lines.append(f"   accuracy    CPL {old:.0f} → {c('1;33', f'{new:.0f}')}"
+                     f"  {better_worse(old, new)}"
+                     f"  {c('2', '(older half vs newer half, lower = better)')}")
+        facts.append(f"CPL {old:.0f}→{new:.0f}")
+    halves = split_halves(blunder_trend(analyzed))
+    if halves:
+        old, new = halves
+        lines.append(f"   blunders    {old:.1f} → {c('1;33', f'{new:.1f}')}"
+                     f" per game  {better_worse(old, new)}")
+        facts.append(f"blunders/game {old:.1f}→{new:.1f}")
+
+    phases = phase_acpl(analyzed)
+    if phases:
+        worst = max(phases, key=lambda k: phases[k][0])
+        lines.append(f"   {c('2', 'where the eval collapses (ACPL)')}")
+        top = max(a for a, _, _ in phases.values())
+        for phase in ("opening", "middlegame", "endgame"):
+            if phase not in phases:
+                continue
+            acpl, blunders, n = phases[phase]
+            # fill = share of the damage; the worst phase burns red
+            filled = max(1, round(acpl / top * 10)) if top else 0
+            tone = "31" if phase == worst else "38;5;250"
+            bar = (c(tone, "█" * filled)
+                   + c("38;5;240", "░" * (10 - filled)))
+            mark = c("1;31", "  ◀ collapse") if phase == worst else ""
+            lines.append(f"   {phase:<10} {bar} {acpl:4.0f} cp/move · "
+                         f"{blunders} blunders{mark}")
+            facts.append(f"{phase} ACPL {acpl:.0f} ({blunders} blunders)")
+
+    clocks = clock_report(analyzed, {p["uuid"]: p for p in parsed})
+    t = clocks["timeout_losses"]
+    n_timeouts = sum(len(v) for v in t.values())
+    if n_timeouts:
+        lines.append(f"   {c('2', 'timeout losses, judged by the engine')}")
+        lines.append(f"   flagged while FINE  {c('1;31', str(len(t['fine'])))}"
+                     f"   outplayed anyway  {len(t['outplayed'])}"
+                     f"   unclear  {len(t['unclear'])}")
+        facts.append(f"timeout losses: {len(t['fine'])} in fine positions, "
+                     f"{len(t['outplayed'])} outplayed, "
+                     f"{len(t['unclear'])} unclear")
+    if clocks["pressure_moves"]:
+        lines.append(f"   under 30s:  {clocks['pressure_blunders']} blunders "
+                     f"in {clocks['pressure_moves']} moves")
+        facts.append(f"{clocks['pressure_blunders']} blunders in "
+                     f"{clocks['pressure_moves']} sub-30s moves")
+    lines.append(_rule(color))
+    return "\n".join(lines), "; ".join(facts)
+
+
 def _stats_line(stats: dict) -> str | None:
     """'blitz 100 · rapid 526 · 39W/53L/4D lifetime' from chess.com stats."""
     parts, w, l, d = [], 0, 0, 0
@@ -839,6 +952,16 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                     {"role": "user", "content": question},
                     {"role": "assistant", "content":
                         f"I showed {nick} their stats. {facts}"},
+                ]
+                continue
+
+            # "trends" is unambiguous — engine metrics, no model round-trip
+            if re.fullmatch(r"trends?|metrics", question, re.IGNORECASE):
+                result = tools.call("show_trends", {})
+                messages += [
+                    {"role": "user", "content": question},
+                    {"role": "assistant", "content":
+                        f"I showed {nick} their engine metrics. {result}"},
                 ]
                 continue
 
