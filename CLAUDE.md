@@ -79,6 +79,15 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
   `opening_records` ("Opening (Color)" keys), `rating_buckets` (±100),
   `endings` (termination mix — the timeout insight lives here).
   "What happened" = this module; "why" = Stockfish in analyze.py, on top.
+- `metrics.py` — engine-layer coaching metrics over analyze.py's cached
+  output joined with chesscom parsed records (runs no engine itself):
+  `cpl_trend`, `blunder_trend`, `phase_acpl`, `split_halves`
+  (older-vs-newer-half averages), and `clock_report` — parses PGN
+  `%clk` tags to find blunders under 30s and to split timeout losses
+  into fine (final eval ≥ +1.5) / outplayed (≤ −1.5) / unclear.
+  Rendered by agent `_metrics_panel`; `show_trends` tool (8th) +
+  `trends` fast path. Real data 2026-07-15: CPL 141→111 improving,
+  endgame 329 cp/move = the collapse phase.
 - `analyze.py` — Stockfish evals of the user's moves only; cp-loss classes
   50/100/250; mate folded to ±1500; cached per game uuid in `data/analysis/`.
   KNOWN LIMITATION: `--movetime` is not part of the cache key.
