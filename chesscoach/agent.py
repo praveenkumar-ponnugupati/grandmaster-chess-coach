@@ -16,8 +16,14 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 from pathlib import Path
+
+try:  # arrow-key editing + history in input(); harmless if unavailable
+    import readline
+except ImportError:  # pragma: no cover
+    readline = None
 
 import chess
 import chess.engine
@@ -436,7 +442,9 @@ def run_turn(question: str, messages: list[dict], tools: CoachTools,
             nonlocal started, next_at
             if not started:
                 _clear_status()
-                print("coach › ", end="", flush=True)
+                prefix = ("\033[1;33mcoach ›\033[0m " if pace
+                          else "coach › ")
+                print(prefix, end="", flush=True)
                 started = True
                 next_at = time.monotonic()
             if not pace:
@@ -587,6 +595,49 @@ def _rule(color: bool = True) -> str:
     """Dim divider separating a stat drop from the coach's words."""
     line = "─" * RULE_WIDTH
     return f"\033[2m{line}\033[0m" if color else line
+
+
+def _prompt() -> str:
+    """Gold `you ›` prompt. Non-printing color codes are wrapped in
+    \\001/\\002 when readline is active so line editing keeps correct
+    widths; plain text when piped."""
+    if not sys.stdout.isatty():
+        return "you › "
+    if readline:
+        return "\001\033[1;33m\002you ›\001\033[0m\002 "
+    return "\033[1;33myou ›\033[0m "
+
+
+def _setup_history(data_dir: Path) -> None:
+    """Arrow-key recall of past questions, persisted across sessions."""
+    if readline is None:
+        return
+    hist = data_dir / ".repl-history"
+    try:
+        if hist.exists():
+            readline.read_history_file(hist)
+        readline.set_history_length(500)
+    except OSError:
+        pass
+
+
+def _save_history(data_dir: Path) -> None:
+    if readline is None:
+        return
+    try:
+        data_dir.mkdir(parents=True, exist_ok=True)
+        readline.write_history_file(data_dir / ".repl-history")
+    except OSError:
+        pass
+
+
+HELP = """\
+   commands   stats · openings · trends · scout USERNAME · help · clear · exit
+   or just talk to your coach:
+     "how am I losing games?" · "show my worst blunder on the board"
+     "what did we work on last time?" · "remember this: …"
+     "compare me against hikaru" · "am I improving?"\
+"""
 
 
 def _openings_panel(recs: dict, color: bool | None = None,
@@ -909,31 +960,42 @@ def _print_banner(user: str, engine_path: str, memory: Supermemory,
         print(f"\n   {red}✗ Memory{off} {dim}Supermemory is OFF — memories "
               f"won't be kept; run via ./coach to enable{off}")
     print(f'{dim}   "how am I losing games?" · "scout hikaru" · '
-          f'"what did we work on last time?" · exit to quit{off}\n')
+          f'"what did we work on last time?" · help · exit{off}\n')
 
 
 def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                movetime: float = 0.1, model: str = MODEL) -> None:
     tools = CoachTools(user, engine_path, data_dir, out_dir, movetime)
-    nick = _nickname(user)
+    # Startup data comes from four independent sources — fetch concurrently
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        f_nick = pool.submit(_nickname, user)
+        f_stats = pool.submit(get_stats, user)
+        f_note = pool.submit(_last_session_note, tools.memory, user)
+        f_recent = pool.submit(
+            lambda: parse_games(rated_recent_games(user, 2, 60, data_dir),
+                                user))
+        def got(fut, fallback):
+            try:
+                return fut.result()
+            except Exception:
+                return fallback
+        nick = got(f_nick, user)
+        stats = got(f_stats, {})
+        last_note = got(f_note, None)
+        recent = got(f_recent, [])
     system = SYSTEM.format(user=user, nick=nick)
-    last_note = _last_session_note(tools.memory, user)
     if last_note:
         system += ("\n\nWhat you remember from your previous session "
                    "(use it to keep continuity — refer back naturally):\n"
                    + last_note)
     messages = [{"role": "system", "content": system}]
-    try:  # recent games power the header trends; never block startup on them
-        recent = parse_games(rated_recent_games(user, 2, 60, data_dir), user)
-    except Exception:
-        recent = []
     _print_banner(user, engine_path, tools.memory, model, nick,
-                  stats=get_stats(user), watchlist=_watchlist(last_note),
-                  games=recent)
+                  stats=stats, watchlist=_watchlist(last_note), games=recent)
+    _setup_history(data_dir)
     try:
         while True:
             try:
-                question = input("you › ").strip()
+                question = input(_prompt()).strip()
             except (EOFError, KeyboardInterrupt):
                 print()
                 return
@@ -941,6 +1003,12 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                 continue
             if question.lower() in ("exit", "quit", "q"):
                 return
+            if question.lower() in ("help", "?"):
+                print("\n" + HELP + "\n")
+                continue
+            if question.lower() == "clear":
+                print("\033[2J\033[H", end="", flush=True)
+                continue
 
             # "stats" is unambiguous — trends + record, no model round-trip
             if re.fullmatch(r"stats?", question, re.IGNORECASE):
@@ -1004,4 +1072,5 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
     finally:
         # Runs on exit/quit, Ctrl-C at the prompt, and crashes alike:
         # this session becomes memory before the process dies
+        _save_history(data_dir)
         _persist_session(user, messages, tools.memory, model)
