@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>♞ Grandmaster Chess Coach</title>
+<style>
+  :root { --gold:#ffd75f; --green:#5fbf5f; --red:#d75f5f; --dim:#8a8a8a;
+          --bg:#121212; --card:#1c1c1c; --line:#2c2c2c; }
+  * { box-sizing:border-box; }
+  body { background:var(--bg); color:#ddd; margin:0;
+         font-family:"SF Mono","Fira Code",Menlo,Consolas,monospace; }
+  .wrap { max-width:880px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { color:var(--gold); letter-spacing:2px; margin:8px 0 2px;
+       font-size:clamp(22px,5vw,34px); }
+  .tag { color:var(--dim); font-size:13px; margin-bottom:24px; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; }
+  input { flex:1; min-width:200px; background:var(--card); color:#eee;
+          border:1px solid var(--line); border-radius:6px; padding:12px 14px;
+          font:inherit; font-size:15px; }
+  button { background:var(--gold); color:#111; border:0; border-radius:6px;
+           padding:12px 20px; font:inherit; font-weight:700; cursor:pointer; }
+  button:disabled { opacity:.45; cursor:wait; }
+  button.ghost { background:var(--card); color:var(--gold);
+                 border:1px solid var(--gold); }
+  .card { background:var(--card); border:1px solid var(--line);
+          border-radius:10px; padding:16px 18px; margin-top:16px; }
+  .card h2 { color:var(--gold); font-size:14px; text-transform:uppercase;
+             letter-spacing:1.5px; margin:0 0 12px; }
+  .bar { display:inline-block; height:10px; border-radius:2px;
+         background:var(--line); position:relative; width:140px;
+         vertical-align:middle; }
+  .bar i { position:absolute; inset:0 auto 0 0; border-radius:2px; }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  td, th { padding:6px 8px; text-align:left; white-space:nowrap; }
+  th { color:var(--dim); font-weight:400; border-bottom:1px solid var(--line); }
+  .g { color:var(--green); } .r { color:var(--red); } .d { color:var(--dim); }
+  .gold { color:var(--gold); }
+  .flag { color:var(--red); font-weight:700; }
+  .streak span { display:inline-block; width:14px; height:14px; margin-right:3px;
+                 border-radius:2px; }
+  .boards { display:grid; grid-template-columns:repeat(auto-fill,minmax(280px,1fr));
+            gap:16px; }
+  .boards figure { margin:0; }
+  .boards img { width:100%; border-radius:6px; }
+  .boards figcaption { font-size:12px; color:var(--dim); margin-top:6px; }
+  .coachbox { border-left:3px solid var(--gold); padding:10px 14px;
+              color:#eee; line-height:1.55; font-size:14px; }
+  #status { color:var(--dim); margin-top:10px; min-height:20px; font-size:13px; }
+  .err { color:var(--red); }
+  a { color:var(--gold); }
+  .hidden { display:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>♞ GRANDMASTER</h1>
+  <div class="tag">your chess coach — enter a chess.com username, see the flaws, fix them</div>
+
+  <div class="row">
+    <input id="user" placeholder="chess.com username, e.g. hikaru"
+           autocomplete="off" spellcheck="false">
+    <button id="go">look me up</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="results" class="hidden">
+    <div class="card"><h2 id="whoTitle">player</h2><div id="who"></div></div>
+    <div class="card"><h2>record</h2><div id="rec"></div></div>
+    <div class="card"><h2>openings — where the points leak</h2><div id="ops"></div></div>
+    <div class="card"><h2>how your games end</h2><div id="ends"></div></div>
+    <div class="card">
+      <h2>engine deep-dive <span class="d">(Stockfish, ~30–60s)</span></h2>
+      <button id="analyze" class="ghost">run engine analysis</button>
+      <div id="aprog"></div>
+      <div id="aresult"></div>
+    </div>
+    <div class="card hidden" id="memcard"><h2>coach's memory</h2><div id="mem"></div></div>
+    <div class="card hidden" id="voicecard"><h2>coach says</h2>
+      <div class="coachbox" id="voice"></div></div>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"]/g,
+  c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+let USER = "";
+
+function pct(w,l,d){ const n=w+l+d; return n ? (w+d/2)/n*100 : 0; }
+function bar(p, tone){
+  const c = tone || (p>=55 ? "var(--green)" : p<=45 ? "var(--red)" : "var(--dim)");
+  return `<span class="bar"><i style="width:${p.toFixed(0)}%;background:${c}"></i></span>`;
+}
+
+async function lookup(){
+  USER = $("user").value.trim().toLowerCase();
+  if(!USER) return;
+  $("go").disabled = true;
+  $("status").textContent = "fetching archives …";
+  $("results").classList.add("hidden");
+  try{
+    const r = await fetch(`/api/stats/${encodeURIComponent(USER)}`);
+    if(!r.ok) throw new Error((await r.json()).detail || r.statusText);
+    render(await r.json());
+    $("status").textContent = "";
+    $("results").classList.remove("hidden");
+    loadMemory();
+  }catch(e){
+    $("status").innerHTML = `<span class="err">${esc(e.message)}</span>`;
+  }finally{ $("go").disabled = false; }
+}
+
+function render(s){
+  $("whoTitle").textContent = `${s.name} · ${s.games} rated games (2 months)`;
+  $("who").innerHTML = s.trends.map(t=>{
+    const rs=t.ratings, lo=Math.min(...rs), hi=Math.max(...rs);
+    const pos = hi>lo ? (rs[rs.length-1]-lo)/(hi-lo)*100 : 50;
+    const move = t.week_delta ?? rs[rs.length-1]-rs[0];
+    const arrow = move>0 ? `<span class="g">↑${move}</span>`
+                : move<0 ? `<span class="r">↓${-move}</span>` : `<span class="d">→</span>`;
+    const tone = move>0 ? "var(--green)" : move<0 ? "var(--red)" : "var(--dim)";
+    return `<div>${esc(t.time_class).padEnd(8)} <b class="gold">${rs[rs.length-1]}</b>
+            ${bar(pos,tone)} ${arrow}</div>`;
+  }).join("") || '<span class="d">no rated games found</span>';
+
+  const rec = s.record, rows = [["overall",rec.overall],
+    ["as White",rec.by_color.white],["as Black",rec.by_color.black],
+    ...Object.entries(rec.by_time_class)];
+  $("rec").innerHTML = rows.filter(([,x])=>x[0]+x[1]+x[2]>0).map(([k,[w,l,d]])=>{
+    const p=pct(w,l,d);
+    return `<div>${esc(k).padEnd(10)} ${w}W/${l}L/${d}D ${bar(p)}
+            <span class="${p>=55?'g':p<=45?'r':'d'}">${p.toFixed(0)}%</span></div>`;
+  }).join("") + `<div class="streak" style="margin-top:8px">last ${rec.streak.length}:
+     ${rec.streak.map(x=>`<span style="background:${
+       x==='win'?'var(--green)':x==='loss'?'var(--red)':'var(--dim)'}"></span>`).join("")}
+     <span class="d">(oldest → newest)</span></div>`;
+
+  const ops = s.openings;
+  $("ops").innerHTML = ops.length ? `<table><tr><th>opening</th><th>score</th>
+    <th></th><th>win%</th></tr>` + ops.map(o=>{
+      const p=pct(o.w,o.l,o.d), n=o.w+o.l+o.d;
+      const worst = ops.filter(x=>x.w+x.l+x.d>=3)
+                       .every(x=>pct(x.w,x.l,x.d)>=p) && n>=3;
+      return `<tr><td>${esc(o.opening)}</td><td>${o.w}W/${o.l}L/${o.d}D</td>
+        <td>${bar(p)}</td><td>${p.toFixed(0)}%${worst?' <span class="flag">◀ fix this</span>':''}</td></tr>`;
+    }).join("") + "</table>" : '<span class="d">not enough data</span>';
+
+  const loss = s.endings.loss || {}, total = Object.values(loss).reduce((a,b)=>a+b,0);
+  const parts = Object.entries(loss).sort((a,b)=>b[1]-a[1])
+    .map(([k,v])=>`${esc(k)} ${v} (${(v/total*100).toFixed(0)}%)`).join(" · ");
+  const t = loss.timeout||0;
+  $("ends").innerHTML = (total?`<div>losses by: ${parts}</div>`:"") +
+    (total && t/total>=.25 ? `<div class="flag" style="margin-top:6px">
+       ◀ ${t} of ${total} losses are on time — that's clock, not chess</div>`:"") +
+    `<div style="margin-top:10px" class="d">vs opponent strength (±100):</div>` +
+    Object.entries(s.buckets).map(([k,[w,l,d]])=>{
+      const n=w+l+d; if(!n) return "";
+      const p=pct(w,l,d);
+      return `<div>vs ${esc(k).padEnd(8)} ${bar(p)} ${p.toFixed(0)}% <span class="d">(${n} games)</span></div>`;
+    }).join("");
+}
+
+async function analyze(){
+  $("analyze").disabled = true;
+  await fetch(`/api/analyze/${encodeURIComponent(USER)}`, {method:"POST"});
+  const timer = setInterval(async ()=>{
+    const j = await (await fetch(`/api/analyze/${encodeURIComponent(USER)}`)).json();
+    if(j.status==="queued"||j.status==="analyzing"){
+      $("aprog").textContent = `♞ engine thinking … ${j.progress||""}`;
+    }else{
+      clearInterval(timer); $("aprog").textContent = "";
+      $("analyze").disabled = false;
+      if(j.status==="done"){ renderAnalysis(j.result); narrate(); }
+      else $("aprog").innerHTML = `<span class="err">${esc(j.error||"failed")}</span>`;
+    }
+  }, 1500);
+}
+
+function renderAnalysis(r){
+  let html = "";
+  if(r.cpl_halves){
+    const [o,n]=r.cpl_halves, up=n<o;
+    html += `<div>accuracy: CPL ${o.toFixed(0)} → <b class="gold">${n.toFixed(0)}</b>
+             <span class="${up?'g':'r'}">${up?'↓ improving':'↑ worsening'}</span></div>`;
+  }
+  if(r.blunder_halves){
+    const [o,n]=r.blunder_halves, up=n<o;
+    html += `<div>blunders: ${o.toFixed(1)} → <b class="gold">${n.toFixed(1)}</b>/game
+             <span class="${up?'g':'r'}">${up?'↓ improving':'↑ worsening'}</span></div>`;
+  }
+  const phases = Object.entries(r.phases);
+  if(phases.length){
+    const top = Math.max(...phases.map(([,v])=>v.acpl));
+    const worst = phases.reduce((a,b)=>a[1].acpl>b[1].acpl?a:b)[0];
+    html += `<div style="margin-top:10px" class="d">where the eval collapses:</div>` +
+      phases.map(([k,v])=>`<div>${esc(k).padEnd(11)}
+        ${bar(v.acpl/top*100, k===worst?"var(--red)":"var(--dim)")}
+        ${v.acpl.toFixed(0)} cp/move · ${v.blunders} blunders
+        ${k===worst?'<span class="flag">◀ collapse</span>':''}</div>`).join("");
+  }
+  const c = r.clock, tl = c.timeout_losses;
+  const nt = tl.fine.length+tl.outplayed.length+tl.unclear.length;
+  if(nt) html += `<div style="margin-top:10px">timeout losses:
+      <span class="flag">${tl.fine.length} while FINE</span> ·
+      ${tl.outplayed.length} outplayed · ${tl.unclear.length} unclear</div>`;
+  if(c.pressure_moves) html += `<div>under 30s: ${c.pressure_blunders} blunders
+      in ${c.pressure_moves} moves</div>`;
+  if(r.homework.length){
+    html += `<div style="margin-top:14px" class="d">wins you threw away —
+             find the green move:</div><div class="boards">` +
+      r.homework.map(h=>`<figure>
+        <img loading="lazy" src="/api/board.svg?fen=${encodeURIComponent(h.fen)}&played=${encodeURIComponent(h.played)}&best=${encodeURIComponent(h.best)}">
+        <figcaption>move ${h.move_no}: played <span class="r">${esc(h.played)}</span>,
+          best <span class="g">${esc(h.best)}</span> (−${(h.cp/100).toFixed(1)} pawns)
+          · <a href="${esc(h.url)}" target="_blank" rel="noopener">game</a></figcaption>
+        </figure>`).join("") + "</div>";
+  }
+  $("aresult").innerHTML = html;
+  loadMemory();
+}
+
+async function loadMemory(){
+  const m = await (await fetch(`/api/memory/${encodeURIComponent(USER)}`)).json();
+  if(m.enabled && m.notes.length){
+    $("memcard").classList.remove("hidden");
+    $("mem").innerHTML = m.notes.map(n=>`<div class="d" style="margin-bottom:8px">▏ ${esc(n)}</div>`).join("");
+  }
+}
+
+async function narrate(){
+  try{
+    const r = await fetch(`/api/narrate/${encodeURIComponent(USER)}`, {method:"POST"});
+    if(!r.ok) return;
+    $("voicecard").classList.remove("hidden");
+    $("voice").textContent = (await r.json()).text;
+  }catch(_){}
+}
+
+$("go").addEventListener("click", lookup);
+$("user").addEventListener("keydown", e=>{ if(e.key==="Enter") lookup(); });
+$("analyze").addEventListener("click", analyze);
+</script>
+</body>
+</html>
