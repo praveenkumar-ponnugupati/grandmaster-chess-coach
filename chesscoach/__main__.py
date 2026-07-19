@@ -144,7 +144,8 @@ def main() -> int:
             return 1
         chat_loop(args.username, report, scouting=scouting)
         return 0
-    print(report)
+    from .termmd import render_markdown
+    print(render_markdown(report))  # raw markdown when piped
     print(f"\nSaved: {out_file}")
 
     if memory.enabled:
