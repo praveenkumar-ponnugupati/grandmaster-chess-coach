@@ -1,3 +1,13 @@
+---
+title: Grandmaster Chess Coach
+emoji: ♞
+colorFrom: yellow
+colorTo: gray
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Grandmaster Chess Coach — chess.com
 
 Local-first post-game coaching from your own chess.com games: fetches your archive via
