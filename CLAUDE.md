@@ -110,6 +110,10 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 - `pipeline.py` — the shared fetch → analyze → report core; both the CLI
   path and the agent's tools sit on it (`rated_recent_games`,
   `analyze_and_report`, `remember_run`, `save_report`).
+- `termmd.py` — markdown → ANSI for reports shown in-terminal (gold
+  headers, aligned tables, links keep text + dim URL); tty-only —
+  piped output stays raw markdown so redirects produce valid .md.
+  Used by the agent's `scout X` fast path and the classic report print.
 - `board.py` — inline ANSI chess board (Unicode pieces, gray squares,
   green best-move / red played-move highlights, logistic eval bar);
   plain-text fallback when stdout isn't a tty. Raw ANSI on purpose — the

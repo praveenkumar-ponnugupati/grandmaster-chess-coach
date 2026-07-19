@@ -35,6 +35,7 @@ from .chesscom import (endings, get_profile, get_stats, opening_records,
 from .memory import Supermemory
 from .metrics import (blunder_trend, clock_report, cpl_trend, phase_acpl,
                       split_halves)
+from .termmd import render_markdown
 from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
                        remember_run, save_report)
 
@@ -653,7 +654,18 @@ def _openings_panel(recs: dict, color: bool | None = None,
     flagged = min((r for r in rows if sum(r[1]) >= 3),
                   key=lambda kv: (kv[1][0] + kv[1][2] / 2) / sum(kv[1]),
                   default=None)
-    name_w = min(30, max(len(n) for n, _ in rows))
+
+    def shorten(name: str, limit: int = 30) -> str:
+        """Trim long opening names but keep the (Color) tag — it's data."""
+        if len(name) <= limit:
+            return name
+        m = re.search(r" \((White|Black)\)$", name)
+        tail = m.group(0) if m else ""
+        head = name[:len(name) - len(tail)]
+        return head[:limit - len(tail) - 1].rstrip() + "…" + tail
+
+    rows = [(shorten(n), wld) for n, wld in rows]
+    name_w = max(len(n) for n, _ in rows)
     lines = [_rule(color)]
     facts = []
     for name, (w, l, d) in rows:
@@ -666,7 +678,7 @@ def _openings_panel(recs: dict, color: bool | None = None,
         net_s = (c("32", f"+{net}") if net > 0
                  else c("31", str(net)) if net < 0 else c("2", "±0"))
         games_s = f"{n:>2} game" + ("s" if n != 1 else " ")
-        line = (f"   {name[:name_w]:<{name_w}} {bar} {pct:3.0f}%  "
+        line = (f"   {name:<{name_w}} {bar} {pct:3.0f}%  "
                 f"{games_s}  {net_s}")
         if flagged and name == flagged[0]:
             line += c("1;31", "  ◀ fix this")
@@ -1047,7 +1059,7 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
             m = re.fullmatch(r"scout\s+([\w.-]+)", question, re.IGNORECASE)
             if m:
                 report = tools.call("scout_opponent", {"opponent": m.group(1)})
-                print(f"\n{report}\n")
+                print(f"\n{render_markdown(report)}\n")
                 messages += [
                     {"role": "user", "content": question},
                     {"role": "assistant", "content":
