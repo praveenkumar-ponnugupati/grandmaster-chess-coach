@@ -6,12 +6,17 @@ sees the network, and nothing about your games leaves the machine.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
 
 OLLAMA = "http://localhost:11434"
 MODEL = "qwen2.5:7b"
+# Keep the model (and its prompt cache) resident between turns and even
+# between sessions — otherwise Ollama unloads after ~5 idle minutes and
+# the next question pays a full reload + reprocess.
+KEEP_ALIVE = os.environ.get("OLLAMA_KEEP_ALIVE", "2h")
 
 SYSTEM = """You are a friendly but direct chess coach. You are talking to \
 {user} about their recent chess.com games. Base every answer ONLY on the \
@@ -81,7 +86,9 @@ def chat_loop(user: str, report_md: str, model: str = MODEL,
         reply = []
         try:
             with _post("/api/chat", {"model": model, "messages": messages,
-                                     "stream": True}, stream=True) as resp:
+                                     "stream": True,
+                                     "keep_alive": KEEP_ALIVE},
+                       stream=True) as resp:
                 for line in resp:
                     chunk = json.loads(line)
                     piece = chunk.get("message", {}).get("content", "")

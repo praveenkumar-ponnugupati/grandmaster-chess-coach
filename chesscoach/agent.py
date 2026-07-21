@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -29,7 +30,7 @@ import chess
 import chess.engine
 
 from .board import render_board
-from .chat import MODEL, OLLAMA
+from .chat import KEEP_ALIVE, MODEL, OLLAMA
 from .chesscom import (endings, get_profile, get_stats, opening_records,
                        parse_games, rating_buckets, rating_trends, record)
 from .memory import Supermemory
@@ -404,7 +405,8 @@ def _chat_stream(messages: list[dict], model: str, on_text) -> dict:
     """One streamed model response. Text pieces go to `on_text` as they
     arrive; tool calls are collected. Returns the full assistant message."""
     payload = {"model": model, "messages": messages, "tools": TOOLS,
-               "stream": True, "options": {"num_ctx": NUM_CTX}}
+               "stream": True, "keep_alive": KEEP_ALIVE,
+               "options": {"num_ctx": NUM_CTX}}
     req = urllib.request.Request(
         OLLAMA + "/api/chat", data=json.dumps(payload).encode(),
         headers={"Content-Type": "application/json"})
@@ -425,6 +427,26 @@ def _chat_stream(messages: list[dict], model: str, on_text) -> dict:
     if tool_calls:
         out["tool_calls"] = tool_calls
     return out
+
+
+def _warm_model(system: str, model: str) -> None:
+    """Prompt caching, Ollama-style: load the model and prefill the system
+    prompt into its KV cache (num_predict=0 → process, generate nothing).
+    Runs in the background during banner/typing time, so the first
+    question's prompt-processing only pays for the question itself."""
+    # tools included: Ollama renders tool schemas into the prompt, so a
+    # warm-up without them would cache a different prefix than real turns
+    payload = {"model": model, "stream": False, "keep_alive": KEEP_ALIVE,
+               "messages": [{"role": "system", "content": system}],
+               "tools": TOOLS,
+               "options": {"num_ctx": NUM_CTX, "num_predict": 0}}
+    req = urllib.request.Request(
+        OLLAMA + "/api/chat", data=json.dumps(payload).encode(),
+        headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=120).read()
+    except Exception:
+        pass  # warming is an optimization, never a failure
 
 
 def run_turn(question: str, messages: list[dict], tools: CoachTools,
@@ -522,7 +544,7 @@ def _conversation_text(user: str, messages: list[dict]) -> str:
 
 def _summarize(user: str, convo: str, model: str) -> str:
     """One plain (tool-free) model call distilling the session."""
-    payload = {"model": model, "stream": False,
+    payload = {"model": model, "stream": False, "keep_alive": KEEP_ALIVE,
                "options": {"num_ctx": NUM_CTX},
                "messages": [{"role": "user",
                              "content": SUMMARY_PROMPT.format(user=user)
@@ -1001,6 +1023,10 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                    "(use it to keep continuity — refer back naturally):\n"
                    + last_note)
     messages = [{"role": "system", "content": system}]
+    # Prefill the system prompt into the model's cache while the user reads
+    # the banner — the first answer starts noticeably sooner.
+    threading.Thread(target=_warm_model, args=(system, model),
+                     daemon=True).start()
     _print_banner(user, engine_path, tools.memory, model, nick,
                   stats=stats, watchlist=_watchlist(last_note), games=recent)
     _setup_history(data_dir)
