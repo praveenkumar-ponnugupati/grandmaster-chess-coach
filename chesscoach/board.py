@@ -54,9 +54,11 @@ def eval_bar(cp: int, color: bool = True) -> str:
 
 
 def render_board(fen: str, best: str | None = None, played: str | None = None,
-                 eval_cp: int | None = None, color: bool | None = None) -> str:
+                 eval_cp: int | None = None, color: bool | None = None,
+                 flip: bool = False) -> str:
     """The position as terminal art. `best` squares go green, `played` red;
-    an eval bar rides underneath when an eval is known."""
+    an eval bar rides underneath when an eval is known. `flip` draws from
+    Black's side (rank 1 on top)."""
     board = chess.Board(fen)
     if color is None:
         color = sys.stdout.isatty()
@@ -74,9 +76,11 @@ def render_board(fen: str, best: str | None = None, played: str | None = None,
     best_sqs = _move_squares(board, best)
     played_sqs = _move_squares(board, played)
     lines = []
-    for rank in range(7, -1, -1):
+    ranks = range(8) if flip else range(7, -1, -1)
+    files = range(7, -1, -1) if flip else range(8)
+    for rank in ranks:
         cells = []
-        for file in range(8):
+        for file in files:
             sq = chess.square(file, rank)
             light = (file + rank) % 2 == 1
             if sq in best_sqs:
@@ -92,7 +96,8 @@ def render_board(fen: str, best: str | None = None, played: str | None = None,
             else:
                 cells.append(f"{bg}   {OFF}")
         lines.append(f"{DIM} {rank + 1} {OFF}" + "".join(cells))
-    lines.append(f"{DIM}    a  b  c  d  e  f  g  h{OFF}")
+    file_row = "h  g  f  e  d  c  b  a" if flip else "a  b  c  d  e  f  g  h"
+    lines.append(f"{DIM}    {file_row}{OFF}")
     legend = []
     if played:
         legend.append(f"\033[38;5;131m■{OFF} played {played}")
