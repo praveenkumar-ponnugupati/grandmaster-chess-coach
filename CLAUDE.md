@@ -110,6 +110,20 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
 - `pipeline.py` — the shared fetch → analyze → report core; both the CLI
   path and the agent's tools sit on it (`rated_recent_games`,
   `analyze_and_report`, `remember_run`, `save_report`).
+- `tui.py` — stdlib-only TUI (2026-07-21), three pieces that keep the
+  linear REPL: Cockpit (pinned inverse-gold status bar via DECSTBM
+  scroll region rows 2..h; `_status` routes into it when active —
+  module global `_COCKPIT` in agent.py; SIGWINCH redraw; `clear` needs
+  `after_clear()`); `replay [N]` (alt-screen 1049h game stepper, ←/→,
+  UCI-based square highlights — SAN only parses on the pre-move board;
+  flips to the user's color via board.py `flip`); `drill` (alt-screen
+  tactics quiz over thrown-away wins, 2 tries then reveal, results
+  remembered via remember_note). Both need stdin AND stdout ttys
+  (termios on piped stdin killed the session once — guard both);
+  agent.py wraps the calls in try/except so a screen failure never
+  kills the chat, and stops/restarts the cockpit around them.
+  `analyzed_games()` joins parsed archives with cached analyses —
+  replay/drill never start an engine.
 - `termmd.py` — markdown → ANSI for reports shown in-terminal (gold
   headers, aligned tables, links keep text + dim URL); tty-only —
   piped output stays raw markdown so redirects produce valid .md.

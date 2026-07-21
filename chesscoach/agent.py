@@ -37,6 +37,7 @@ from .memory import Supermemory
 from .metrics import (blunder_trend, clock_report, cpl_trend, phase_acpl,
                       split_halves)
 from .termmd import render_markdown
+from .tui import Cockpit, analyzed_games, drill, replay
 from .pipeline import (NoGamesError, analyze_and_report, rated_recent_games,
                        remember_run, save_report)
 
@@ -195,16 +196,22 @@ TOOLS = [
 ]
 
 
+_COCKPIT: Cockpit | None = None  # set while the agent loop runs on a tty
+
+
 def _status(text: str) -> None:
-    """Transient dim status on the current line (tty only) — overwritten by
-    the next status and erased before any real output. The user asked to
-    see responses only, but long engine runs need a sign of life."""
-    if sys.stdout.isatty():
+    """Sign of life while tools run. With the cockpit active it lives in
+    the pinned header; otherwise a transient dim line (tty only)."""
+    if _COCKPIT is not None:
+        _COCKPIT.update(text)
+    elif sys.stdout.isatty():
         print(f"\r\033[2m  ♞ {text}\033[0m\033[K", end="", flush=True)
 
 
 def _clear_status() -> None:
-    if sys.stdout.isatty():
+    if _COCKPIT is not None:
+        _COCKPIT.update(None)
+    elif sys.stdout.isatty():
         print("\r\033[K", end="", flush=True)
 
 
@@ -656,6 +663,8 @@ def _save_history(data_dir: Path) -> None:
 
 HELP = """\
    commands   stats · openings · trends · scout USERNAME · help · clear · exit
+   full-screen: replay [N]  step through your Nth-recent analyzed game (←/→)
+                drill       tactics quiz on the wins you threw away
    or just talk to your coach:
      "how am I losing games?" · "show my worst blunder on the board"
      "what did we work on last time?" · "remember this: …"
@@ -1030,6 +1039,12 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
     _print_banner(user, engine_path, tools.memory, model, nick,
                   stats=stats, watchlist=_watchlist(last_note), games=recent)
     _setup_history(data_dir)
+    global _COCKPIT
+    trends = rating_trends(recent)
+    form = (f"{trends[0][0]} {trends[0][1][-1]}" if trends else "")
+    mem_mark = "memory ✓" if tools.memory.enabled else "memory ✗"
+    _COCKPIT = Cockpit(" · ".join(x for x in (nick, form, mem_mark) if x))
+    _COCKPIT.start()
     try:
         while True:
             try:
@@ -1046,6 +1061,40 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
                 continue
             if question.lower() == "clear":
                 print("\033[2J\033[H", end="", flush=True)
+                if _COCKPIT:
+                    _COCKPIT.after_clear()
+                continue
+
+            # full-screen moments: replay [N] and drill
+            m = re.fullmatch(r"replay(?:\s+(\d+))?", question, re.IGNORECASE)
+            if m or question.lower() == "drill":
+                try:
+                    parsed = tools._parsed_recent()
+                except Exception as e:
+                    print(f"couldn't fetch games: {e}")
+                    continue
+                pool = analyzed_games(parsed, data_dir)
+                if not pool:
+                    print("no analyzed games yet — ask me about your games "
+                          "first, then come back")
+                    continue
+                if _COCKPIT:
+                    _COCKPIT.stop()  # full-screen owns the terminal now
+                try:
+                    if m:
+                        n = int(m.group(1) or 1)
+                        if n < 1 or n > len(pool):
+                            print(f"I have {len(pool)} analyzed games — "
+                                  f"replay 1..{len(pool)}")
+                            continue
+                        replay(pool[n - 1], user)
+                    else:
+                        drill(pool, user, tools.memory)
+                except Exception as e:  # a broken screen must not kill the chat
+                    print(f"[{question.split()[0]} failed: {e}]")
+                finally:
+                    if _COCKPIT:
+                        _COCKPIT.start()
                 continue
 
             # "stats" is unambiguous — trends + record, no model round-trip
@@ -1110,5 +1159,8 @@ def agent_loop(user: str, engine_path: str, data_dir: Path, out_dir: Path,
     finally:
         # Runs on exit/quit, Ctrl-C at the prompt, and crashes alike:
         # this session becomes memory before the process dies
+        if _COCKPIT:
+            _COCKPIT.stop()
+            _COCKPIT = None
         _save_history(data_dir)
         _persist_session(user, messages, tools.memory, model)
