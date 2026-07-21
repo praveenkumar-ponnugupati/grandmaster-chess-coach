@@ -19,6 +19,7 @@ import shutil
 import stat
 import tarfile
 import threading
+import time
 import urllib.request
 from pathlib import Path
 
@@ -44,6 +45,9 @@ GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 
 GOLD, GREEN, RED, DIM = "#ffd75f", "#5fbf5f", "#d75f5f", "#8a8a8a"
 _engine_lock = threading.Lock()  # one Stockfish at a time on shared CPU
+STATS_TTL = 300
+_stats_cache: dict[str, tuple[float, str]] = {}   # user → (ts, html)
+_narr_cache: dict[tuple, str] = {}                # (user, facts) → text
 
 STOCKFISH_URL = ("https://github.com/official-stockfish/Stockfish/releases/"
                  "latest/download/stockfish-ubuntu-x86-64.tar")
@@ -307,6 +311,9 @@ def _narrate(user, analyzed, phases, loss) -> str | None:
     total = sum(loss.values())
     if total:
         facts.append(f"{loss.get('timeout', 0)} of {total} losses on time")
+    cache_key = (user, tuple(facts))
+    if cache_key in _narr_cache:  # same facts → same advice, no API spend
+        return _narr_cache[cache_key]
     prompt = (f"You are a warm, direct chess coach. Player: {user}. "
               f"Engine-verified facts: {'; '.join(facts)}. In 3-4 sentences "
               "tell them the single most important thing to fix and one "
@@ -319,7 +326,9 @@ def _narrate(user, analyzed, phases, loss) -> str | None:
                  "Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
-            return json.load(resp)["choices"][0]["message"]["content"]
+            text = json.load(resp)["choices"][0]["message"]["content"]
+        _narr_cache[cache_key] = text
+        return text
     except Exception:
         return None
 
@@ -328,11 +337,16 @@ def lookup(user: str):
     user = (user or "").strip().lower()
     if not user:
         return "enter a chess.com username"
+    hit = _stats_cache.get(user)
+    if hit and time.time() - hit[0] < STATS_TTL:
+        return hit[1]
     if not player_exists(user):
         return (f'<div style="color:{RED}">chess.com doesn\'t know '
                 f'"{esc(user)}" — check the spelling</div>')
     try:
-        return stats_html(user)
+        html = stats_html(user)
+        _stats_cache[user] = (time.time(), html)
+        return html
     except Exception as e:
         return f'<div style="color:{RED}">failed: {esc(e)}</div>'
 

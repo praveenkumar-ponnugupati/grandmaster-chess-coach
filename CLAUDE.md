@@ -149,6 +149,12 @@ out locally (python-chess 1.11.2, Python 3.12). Stockfish 18 at
   prompt; recall_memory hides chat-transcript docs unless the question
   is conversational (`about_chat` regex). Ctrl-C mid-answer aborts the
   turn, not the session.
+  Prompt caching (2026-07-20): `keep_alive` (OLLAMA_KEEP_ALIVE env,
+  default 2h) on every Ollama call keeps model+KV resident between
+  turns/sessions; `_warm_model` prefills system prompt AND tool schemas
+  (tools change the rendered prefix — warming without them only partial
+  hits) in a background thread at launch. Measured: first answer of a
+  session 4.8s cold → 0.2s prefilled; follow-up turns 0.2s.
   Persona: warm longtime-coach voice; `_nickname` (first name from the
   chess.com profile via `fetch.get_profile`, fallback = alpha prefix of
   the username) is how the coach addresses the player — banner shows
